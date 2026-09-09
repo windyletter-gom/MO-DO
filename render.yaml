@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: mo-do
+    runtime: python
+    plan: 0.5c-512mb
+    buildCommand: echo "MO DO uses Python standard library only"
+    startCommand: python server_stdlib.py
+    healthCheckPath: /
+    envVars:
+      - key: MODO_DATA_DIR
+        value: /var/data
+      - key: MODO_UPLOAD_DIR
+        value: /var/data/uploads
+      - key: MODO_SESSION_HOURS
+        value: "12"
+      - key: MODO_COOKIE_SECURE
+        value: "1"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+    disk:
+      name: modo-data
+      mountPath: /var/data
+      sizeGB: 1
