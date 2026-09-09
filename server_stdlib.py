@@ -1845,6 +1845,23 @@ class App(BaseHTTPRequestHandler):
                 session_user = _session_user(c, self)
                 if not session_user:
                     return self.send_json({"error":"로그인이 필요합니다."},401)
+
+                # 비밀번호 초기화는 대상 사용자 ID(target_user_id)를 세션 사용자 ID와 분리해 처리한다.
+                # 최고관리자는 이원행, 정해근 두 사람만 허용한다.
+                if p=="/api/reset-password":
+                    actor_name=(session_user["name"] or "").strip()
+                    if actor_name not in ("이원행","정해근"):
+                        return self.send_json({"error":"최고관리자만 비밀번호를 초기화할 수 있습니다."},403)
+                    uid=int(x.get("target_user_id") or 0)
+                    target=c.execute("SELECT id,name FROM users WHERE id=?",(uid,)).fetchone()
+                    if not target:
+                        return self.send_json({"error":"사용자를 찾을 수 없습니다."},404)
+                    # 공통 임시 비밀번호. 로그인 후 사용자가 직접 변경하도록 안내한다.
+                    temp_password="1234"
+                    c.execute("UPDATE users SET password_hash=? WHERE id=?",(hash_pw(temp_password),uid))
+                    c.commit()
+                    return self.send_json({"ok":True,"target_name":target["name"],"temporary_password":temp_password})
+
                 x = _force_identity_payload(x, int(session_user["id"]))
 
                 if p=="/api/change-password":
@@ -1857,15 +1874,6 @@ class App(BaseHTTPRequestHandler):
                     if len(new_pw)<4:
                         return self.send_json({"error":"새 비밀번호는 4자 이상이어야 합니다."},400)
                     c.execute("UPDATE users SET password_hash=? WHERE id=?",(hash_pw(new_pw),uid));c.commit()
-                    return self.send_json({"ok":True})
-
-                if p=="/api/reset-password":
-                    # 관리자가 특정 계정 비밀번호를 1234로 초기화
-                    actor=c.execute("SELECT * FROM users WHERE id=?",(x.get("actor_id"),)).fetchone()
-                    if not actor or not (actor["role"] in ("SUPER_ADMIN","DIVISION_ADMIN") or actor["name"] in ("정해근","이원행")):
-                        return self.send_json({"error":"관리자만 초기화할 수 있습니다."},403)
-                    uid=int(x.get("user_id") or 0)
-                    c.execute("UPDATE users SET password_hash=? WHERE id=?",(hash_pw('1234'),uid));c.commit()
                     return self.send_json({"ok":True})
 
                 if p=="/api/projects":

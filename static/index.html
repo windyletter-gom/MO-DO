@@ -388,7 +388,7 @@ const priorityNames={URGENT:'긴급',HIGH:'높음',NORMAL:'보통',LOW:'낮음'}
 const eventNames={GENERAL:'일반',MEETING:'회의',SHOOT:'촬영',MARKETING:'마케팅',REVIEW:'심사/검토',SERVICE:'서비스운영',TASK_DUE:'업무마감'};
 async function api(url,opt){let r=await fetch(url,opt);if(r.status===401){try{localStorage.removeItem('modo_user')}catch(e){};if(!url.includes('/api/login'))showLogin();throw new Error(await r.text())}if(!r.ok)throw new Error(await r.text());return r.json()}
 // 최고관리자: 정해근·이원행 또는 SUPER_ADMIN 역할
-function isSuperAdmin(u){u=u||currentUser;return !!u&&(u.role==='SUPER_ADMIN'||u.name==='정해근'||u.name==='이원행')}
+function isSuperAdmin(u){u=u||currentUser;return !!u&&(['정해근','이원행'].includes((u.name||'').trim()))}
 // 전체 팀 열람 권한: 이사·부서관리자·최고관리자만. 팀장/사원은 본인 팀만.
 function canSeeAllTeams(){return isSuperAdmin()||isExecutiveUser()||currentUser.role==='DIVISION_ADMIN'}
 function applyAdminVisibility(){
@@ -1417,9 +1417,17 @@ function adminOrgUsers(data){
  body.innerHTML=`<div class="card"><div class="row" style="justify-content:space-between"><div><h3>조직 및 계정 관리</h3><div class="muted">조직도 변경은 업무·프로젝트의 팀·부서 선택 항목에도 반영됩니다.</div></div><div class="row"><button class="btn secondary" onclick="adminTeamModal()">조직도 수정</button><button class="btn" onclick="adminUserCreateModal()">+ 조직원 아이디 개설</button></div></div></div>
  <div class="admin-org-grid section">${data.teams.filter(t=>t.active!==0).map(t=>`<div class="admin-org-card"><div class="row"><span class="admin-org-icon">${t.name.slice(0,1)}</span><div><b>${esc(t.name)}</b><div class="muted">${t.active_count}명 · 퇴사 ${t.retired_count}명</div></div></div><div class="admin-team-members">${data.users.filter(u=>u.team_id===t.id&&u.active!==0).slice(0,8).map(u=>`<span class="pill">${esc(u.name)}</span>`).join('')||'<span class="muted">구성원 없음</span>'}</div></div>`).join('')}</div>
  <div class="card section"><div class="row" style="justify-content:space-between"><div><div class="page-kicker">USER ACCOUNTS</div><h3>조직원 및 로그인 아이디</h3></div><div class="row"><button class="btn secondary" onclick="toggleAdminRetired()">${window.adminShowRetired?'재직자만':'퇴사자 포함'}</button><button class="btn" onclick="adminUserCreateModal()">+ 아이디 개설</button></div></div>
- <table><thead><tr><th>이름·아이디</th><th>소속</th><th>직책·직급</th><th>전화번호·내선</th><th>이메일</th><th>계정 상태</th><th>권한 적용</th></tr></thead><tbody>${data.users.filter(u=>window.adminShowRetired||u.active!==0).map(u=>`<tr style="${u.active===0?'opacity:.55':''}"><td><b>${esc(u.name)}</b><div class="muted">${esc(u.login_id||'미설정')}</div></td><td>${u.team_name||'콘텐츠사업부 총괄'}</td><td>${u.job_title||'-'}<div class="muted">${u.rank||'-'}</div></td><td>${u.phone||'-'}<div class="muted">내선 ${u.extension||'-'}</div></td><td>${u.email||'-'}</td><td><span class="pill">${u.active===0?'퇴사':u.account_status==='LOCKED'?'잠금':u.account_status==='LEAVE'?'휴직':'사용 중'}</span></td><td><button class="btn secondary" onclick="adminUserEditModal(${u.id})">개별 권한 설정</button></td></tr>`).join('')}</tbody></table></div>`;
+ <table><thead><tr><th>이름·아이디</th><th>소속</th><th>직책·직급</th><th>전화번호·내선</th><th>이메일</th><th>계정 상태</th><th>권한 적용</th></tr></thead><tbody>${data.users.filter(u=>window.adminShowRetired||u.active!==0).map(u=>`<tr style="${u.active===0?'opacity:.55':''}"><td><b>${esc(u.name)}</b><div class="muted">${esc(u.login_id||'미설정')}</div></td><td>${u.team_name||'콘텐츠사업부 총괄'}</td><td>${u.job_title||'-'}<div class="muted">${u.rank||'-'}</div></td><td>${u.phone||'-'}<div class="muted">내선 ${u.extension||'-'}</div></td><td>${u.email||'-'}</td><td><span class="pill">${u.active===0?'퇴사':u.account_status==='LOCKED'?'잠금':u.account_status==='LEAVE'?'휴직':'사용 중'}</span></td><td><div class="row" style="gap:6px"><button class="btn secondary" onclick="adminUserEditModal(${u.id})">개별 권한 설정</button><button class="btn secondary" style="color:#b54708;border-color:#f1c27d" onclick="adminResetPassword(${u.id},'${esc(u.name)}')">비밀번호 초기화</button></div></td></tr>`).join('')}</tbody></table></div>`;
 }
 function toggleAdminRetired(){window.adminShowRetired=!window.adminShowRetired;adminCenter('ORG')}
+async function adminResetPassword(uid,name){
+ if(!isSuperAdmin()){alert('최고관리자만 비밀번호를 초기화할 수 있습니다.');return}
+ if(!confirm(`${name}님의 비밀번호를 초기화하시겠습니까?\n초기 비밀번호는 1234로 변경됩니다.`))return;
+ try{
+  let r=await api('/api/reset-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_user_id:uid})});
+  alert(`${r.target_name||name}님의 비밀번호를 초기화했습니다.\n\n임시 비밀번호: ${r.temporary_password||'1234'}\n\n로그인 후 비밀번호 변경을 안내해주세요.`);
+ }catch(e){alert(e.message||'비밀번호 초기화 중 오류가 발생했습니다.')}
+}
 function adminTeamModal(){
  showModal('조직도 수정',`<div class="muted">팀 이름과 사용 여부를 관리합니다. 비활성화해도 기존 업무 이력은 유지됩니다.</div>${(_adminData.teams||[]).map(t=>`<div class="row card" style="justify-content:space-between"><div><b>${esc(t.name)}</b><div class="muted">재직 ${t.active_count}명</div></div><button class="btn secondary" onclick="adminEditTeam(${t.id})">수정</button></div>`).join('')}<button class="btn" onclick="adminAddTeam()">+ 팀 추가</button>`);
 }
