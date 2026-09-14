@@ -1332,6 +1332,7 @@ async function workspaceSection(tid,code,btn){
    <div class="card section"><div class="page-kicker">WORKLOAD</div><h3>팀원별 업무량</h3>
      <div class="member-workload-grid">${(d.members||[]).map(m=>`<div class="member-workload-card" onclick="dashboardPersonDrill(${m.user_id})"><div class="row" style="justify-content:space-between"><b>${m.name}</b><span class="pill">${m.active_count||0}건</span></div><div class="muted">${m.rank||''}</div><div class="mini-progress" style="margin-top:10px"><span style="width:${Math.min(100,(m.active_count||0)*12)}%"></span></div><div class="row muted" style="justify-content:space-between;margin-top:8px"><span>막힘 ${m.blocked_count||0}</span><span>지연 ${m.delayed_count||0}</span></div></div>`).join('')||'<div class="muted">팀원 업무 데이터가 없습니다.</div>'}</div>
    </div>`;
+   try{ await renderProductionSummary(tid,body); }catch(e){ console.warn('production summary',e); }
    enableBoardDrag();
    return;
  }
@@ -1658,6 +1659,29 @@ async function saveCollab(){await api('/api/marketing/collab',{method:'POST',hea
 async function marketingResults(tid){let rows=await api('/api/marketing/performance');document.getElementById('wsBody').innerHTML=`<div class="row" style="justify-content:space-between"><div><h3>성과 데이터</h3><div class="muted">월별 실제 운영 결과를 기록합니다. 이후 평가 모듈의 원천 데이터로 활용합니다.</div></div><button class="btn" onclick="resultModal()">+ 성과 데이터</button></div><table class="section"><thead><tr><th>월</th><th>데이터유형</th><th>대상</th><th>수치</th><th>텍스트</th><th>담당</th><th>메모</th></tr></thead><tbody>${rows.map(x=>`<tr><td>${x.snapshot_month}</td><td>${x.data_type}</td><td><b>${esc(x.reference_name)}</b></td><td>${x.value_numeric}</td><td>${esc(x.value_text||'')}</td><td>${x.owner_name||''}</td><td>${esc(x.notes||'')}</td></tr>`).join('')}</tbody></table>`}
 function resultModal(){showModal('성과 데이터 등록',`<label>월</label><input id="rs_month" type="month"><label>데이터 유형</label><input id="rs_type" placeholder="조회수, 방문자, 클릭, 전환, 리드 등"><label>대상</label><input id="rs_ref"><label>수치</label><input id="rs_num" type="number"><label>텍스트 값</label><input id="rs_text"><label>담당자</label><select id="rs_owner">${users.filter(u=>u.active!==0&&u.team_id==2).map(u=>`<option value="${u.id}">${u.name}</option>`)}</select><label>메모</label><textarea id="rs_note"></textarea><button class="btn" onclick="saveResult()">저장</button>`)}
 async function saveResult(){await api('/api/marketing/performance',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({snapshot_month:rs_month.value,data_type:rs_type.value,reference_name:rs_ref.value,value_numeric:+rs_num.value||0,value_text:rs_text.value,owner_id:+rs_owner.value,notes:rs_note.value})});closeModal();marketingResults(2)}
+
+/* ===== 팀 오버뷰에 제작 작업량(콘.제작 / 마케팅 영상) 요약 반영 ===== */
+async function renderProductionSummary(tid,body){
+ if(tid===1){
+   let fo=await api('/api/filming/overview');
+   if(!fo || !fo.total_clips) return;
+   let profCards=(fo.by_professor||[]).filter(p=>p.total>0).map(p=>`<div class="member-workload-card"><div class="row" style="justify-content:space-between"><b>${esc(p.professor)}</b><span class="pill">${p.total}클립</span></div><div class="muted" style="font-size:12px">촬영 ${p.shot} · 코딩 ${p.coded} · 정산 ${p.settled}</div><div class="mini-progress" style="margin-top:8px"><span style="width:${p.total?Math.round(p.shot*100/p.total):0}%;background:#ef6a5b"></span></div></div>`).join('');
+   body.insertAdjacentHTML('beforeend',`<div class="card section" style="border-left:4px solid #8b5cf6"><div class="row" style="justify-content:space-between"><div><div class="page-kicker">PRODUCTION · 강의촬영(콘.제작)</div><h3>강의촬영 제작 작업량</h3><div class="muted">TOP EVENT 촬영 진행 현황이 팀 작업량에 반영됩니다.</div></div><button class="btn secondary" onclick="workspaceSection(1,'FILMING',document.querySelector('.workspace-menu button[onclick*=FILMING]'))">강의촬영 열기 →</button></div>
+   <div class="grid4 section">${metric('진행중 과정',fo.active)}${metric('전체 클립',fo.total_clips)}${metric('촬영 진척률',fo.shot_rate+'%')}${metric('정산 진척률',fo.settled_rate+'%')}</div>
+   <h4 style="margin:10px 0 6px">담당교수별 작업량</h4><div class="member-workload-grid">${profCards||'<div class="muted">데이터 없음</div>'}</div></div>`);
+ }
+ if(tid===2){
+   let [vs,wl]=await Promise.all([api('/api/marketing/video-stats'),api('/api/marketing/weekly-latest').catch(()=>null)]);
+   if(!vs || !vs.total) return;
+   let editors=(vs.workload_editor||[]).map(m=>`<div class="member-workload-card"><div class="row" style="justify-content:space-between"><b>${esc(m.name)}</b><span class="pill">${m.count}건</span></div><div class="muted" style="font-size:12px">편집</div><div class="mini-progress" style="margin-top:8px"><span style="width:${Math.min(100,m.count/(vs.workload_editor[0].count||1)*100)}%;background:#4f83b0"></span></div></div>`).join('');
+   let pms=(vs.workload_pm||[]).slice(0,8).map(m=>`<div class="legend-row"><span>${esc(m.name)}</span><b>${m.count}건</b></div>`).join('');
+   let ytSubs=wl?wl.latest.filter(x=>x.category==='youtube'&&x.metric==='subscribers'):[];
+   let subTotal=ytSubs.reduce((a,b)=>a+(b.value||0),0);
+   body.insertAdjacentHTML('beforeend',`<div class="card section" style="border-left:4px solid #22a06b"><div class="row" style="justify-content:space-between"><div><div class="page-kicker">PRODUCTION · 마케팅 영상 제작</div><h3>마케팅 영상 제작 작업량</h3><div class="muted">월별 영상 제작 실적이 팀 작업량에 반영됩니다.</div></div><button class="btn secondary" onclick="workspaceSection(2,'MKT_VIDEO',document.querySelector('.workspace-menu button[onclick*=MKT_VIDEO]'))">영상 제작 현황 열기 →</button></div>
+   <div class="grid4 section">${metric(esc((vs.latest_month||'')+' 제작'),vs.this_month+'건')}${metric('진행중',vs.in_progress+'건')}${metric('누적 제작',vs.total.toLocaleString()+'건')}${metric('유튜브 구독자 합계',subTotal?subTotal.toLocaleString():'-')}</div>
+   <div class="marketing-columns section"><div><h4 style="margin:6px 0">편집자별 작업량</h4><div class="member-workload-grid" style="grid-template-columns:repeat(3,1fr)">${editors||'<div class="muted">데이터 없음</div>'}</div></div><div class="chart-card"><div class="page-kicker">PM별 작업량</div>${pms||'<div class="muted">데이터 없음</div>'}</div></div></div>`);
+ }
+}
 
 /* ===================== 콘텐츠 제작(콘.제작) 강의촬영 스케줄 ===================== */
 function triBar(label,rate,color){return `<div style="margin:6px 0"><div class="row" style="justify-content:space-between;font-size:12px"><span class="muted">${label}</span><b>${rate}%</b></div><div class="mini-progress"><span style="width:${rate}%;background:${color}"></span></div></div>`}
