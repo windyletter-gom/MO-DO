@@ -356,7 +356,7 @@ input,select,textarea{width:100%;padding:9px;border:1px solid var(--line);border
       <input id="login_pw" type="password" placeholder="비밀번호" onkeydown="if(event.key==='Enter')doLogin()">
       <button class="login-btn" onclick="doLogin()">로그인</button>
       <div id="login_err" class="login-err"></div>
-      <div class="login-hint">등록된 사내 계정으로 로그인하세요. 최초 로그인 후 우측 상단 <b>개인 설정</b>에서 비밀번호 변경을 권장합니다.</div>
+      <div class="login-hint">최초 비밀번호는 <b>1234</b>입니다. 로그인 후 우측 상단 <b>개인 설정</b>에서 변경하세요.</div>
     </div>
   </div>
 </div>
@@ -386,9 +386,9 @@ let users=[],teams=[],projects=[],currentUser=null,currentView='home',calDate=ne
 const statusNames={TODO:'업무대기',IN_PROGRESS:'진행중',BLOCKED:'막힘',REVIEW:'검토/확인',DONE:'완료'};
 const priorityNames={URGENT:'긴급',HIGH:'높음',NORMAL:'보통',LOW:'낮음'};
 const eventNames={GENERAL:'일반',MEETING:'회의',SHOOT:'촬영',MARKETING:'마케팅',REVIEW:'심사/검토',SERVICE:'서비스운영',TASK_DUE:'업무마감'};
-async function api(url,opt){let r=await fetch(url,opt);if(r.status===401){try{localStorage.removeItem('modo_user')}catch(e){};if(!url.includes('/api/login'))showLogin();throw new Error(await r.text())}if(!r.ok)throw new Error(await r.text());return r.json()}
+async function api(url,opt){let r=await fetch(url,opt);if(!r.ok)throw new Error(await r.text());return r.json()}
 // 최고관리자: 정해근·이원행 또는 SUPER_ADMIN 역할
-function isSuperAdmin(u){u=u||currentUser;return !!u&&(['정해근','이원행'].includes((u.name||'').trim()))}
+function isSuperAdmin(u){u=u||currentUser;return !!u&&(u.role==='SUPER_ADMIN'||u.name==='정해근'||u.name==='이원행')}
 // 전체 팀 열람 권한: 이사·부서관리자·최고관리자만. 팀장/사원은 본인 팀만.
 function canSeeAllTeams(){return isSuperAdmin()||isExecutiveUser()||currentUser.role==='DIVISION_ADMIN'}
 function applyAdminVisibility(){
@@ -397,11 +397,15 @@ function applyAdminVisibility(){
  btn.style.display=isSuperAdmin()?'flex':'none';
 }
 async function boot(){
- // 서버의 HttpOnly 세션 쿠키가 유효한지 확인한다.
- try{
-   let me=await api('/api/session');
-   if(me&&me.user){try{localStorage.setItem('modo_user',JSON.stringify({id:me.user.id,email:me.user.email}))}catch(e){};await startApp(me.user);return}
- }catch(e){}
+ // 저장된 로그인 세션 확인
+ let saved=null;
+ try{saved=JSON.parse(localStorage.getItem('modo_user')||'null')}catch(e){}
+ if(saved&&saved.id){
+   try{
+     let us=await api('/api/users');let u=(us||[]).find(x=>x.id===saved.id&&x.active!==0);
+     if(u){await startApp(u);return}
+   }catch(e){}
+ }
  showLogin();
 }
 function showLogin(){
@@ -421,7 +425,7 @@ async function doLogin(){
  try{localStorage.setItem('modo_user',JSON.stringify({id:r.user.id,email:r.user.email}))}catch(e){}
  await startApp(r.user);
 }
-async function doLogout(){try{await fetch('/api/logout',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})}catch(e){}try{localStorage.removeItem('modo_user')}catch(e){}location.reload();}
+function doLogout(){try{localStorage.removeItem('modo_user')}catch(e){}location.reload();}
 function parseApiError(e,fallback){try{let m=JSON.parse(String(e.message||e));return m.error||fallback}catch(_){return fallback}}
 async function startApp(u){
  document.getElementById('loginPage').style.display='none';
@@ -461,15 +465,23 @@ async function refreshProject(id,mode=null){
  projects=await api('/api/projects?viewer_id='+currentUser.id);
  await openProject(id,mode||navContext.projectMode||'DASHBOARD');
 }
+// 완료·승인 등 업무 상태 변경 후 현재 보고 있는 목록을 그 자리에서 즉시 새로고침
+async function afterTaskAction(){
+ if(navContext.projectId){await refreshProject(navContext.projectId,navContext.projectMode||'DASHBOARD');return}
+ if(navContext.workspaceTeamId&&(navContext.workspaceSection||navContext.boardId)){await refreshCurrentContext();return}
+ if(currentView==='mywork'){await mywork(window._myWorkScope||'mine');return}
+ await refreshCurrentContext();
+}
 async function reopenWorkspaceSection(tid,code){
  let w=await api('/api/workspace/'+tid);pageTitle.textContent=`${w.team.name} WORKSPACE`;
  let common=[['OVERVIEW','오버뷰'],['TASKS','업무/프로젝트'],['SCHEDULE','일정 관리'],['MEETING','회의록'],['PURCHASE','구매내역'],['BOOK','독서토론'],['CHECKLIST','체크리스트'],['RESOURCE','자료/링크'],['DATACENTER','데이터 관리 센터'],['DATABOARD','데이터보드'],['KPI','KPI']];
- if(tid===1) common.splice(6,0,['REFUND','환불과정 관리'],['MCC_REVIEW','교재·법령 검수']);
+ if(tid===1) common.splice(2,0,['FILMING','강의촬영(콘.제작)']);
+ if(tid===1) common.splice(8,0,['REFUND','환불과정 관리'],['MCC_REVIEW','교재·법령 검수']);
  if(tid===6){
    common.splice(2,0,['CUSTOMER','고객 DB / 온보딩'],['CONSULT','상담 관리'],['KNOWLEDGE','상담 지식DB'],['STUDY','상품/과정 스터디']);
  }
  if(tid===2){
-   common.splice(2,0,['MKT_OVERVIEW','마케팅 통합현황'],['MKT_CHANNEL','채널 운영'],['MKT_CAMPAIGN','광고·캠페인'],['MKT_CONTENT','콘텐츠 캘린더'],['MKT_LEAD','리드·유입 관리'],['MKT_EVENT','행사·프로모션'],['MKT_COLLAB','협업 요청'],['MKT_RESULT','성과 데이터']);
+   common.splice(2,0,['MKT_OVERVIEW','마케팅 통합현황'],['MKT_CHANNEL','채널 운영'],['MKT_CAMPAIGN','광고·캠페인'],['MKT_CONTENT','콘텐츠 캘린더'],['MKT_LEAD','리드·유입 관리'],['MKT_EVENT','행사·프로모션'],['MKT_VIDEO','영상 제작 현황'],['MKT_ANALYSIS','채널 분석(주간)'],['MKT_COLLAB','협업 요청'],['MKT_RESULT','성과 데이터']);
  }
  if(tid===3){
    common.splice(2,0,['PLAN_OVERVIEW','기획 통합현황'],['PLAN_LIVE','라이브특강'],['PLAN_PROMO','프로모션·이벤트'],['PLAN_PRODUCT','상품·가격 관리'],['PLAN_B2B','B2B 판매 관리'],['PLAN_SITE','사이트 운영']);
@@ -857,9 +869,9 @@ function workManagementCard(t){
  if(t.status==='TODO')action=`<button class="btn" onclick="event.stopPropagation();startTask(${t.id})">업무 시작</button>`;
  else if(t.status==='IN_PROGRESS'&&t.assignee_id===currentUser.id)action=t.completion_mode==='REVIEW'?`<button class="btn" onclick="event.stopPropagation();reviewRequestModal(${t.id})">검토 요청</button>`:`<button class="btn" onclick="event.stopPropagation();completeTaskFlow(${t.id})">완료보고</button>`;
  else if(t.status==='REVIEW')action=`<button class="btn secondary" onclick="event.stopPropagation();openReviewRequest(${t.id})">검토 내역</button>`;
- return `<div class="work-card-rich task" draggable="true" data-id="${t.id}" data-status="${t.status}" ondblclick="openTaskDetail(${t.id})"><div class="work-tags"><span class="pill">${esc(t.category||'업무')}</span><span class="pill">${t.assignee_id===currentUser.id?'담당':t.created_by===currentUser.id?'작성':t.reviewer_id===currentUser.id?'현재 승인':'공유'}</span>${t.priority==='URGENT'?'<span class="pill URGENT">긴급</span>':''}</div><h4>${esc(t.title)}</h4><div class="muted">${t.team_name||'-'}${t.project_name?' · '+esc(t.project_name):''}</div>${t.assignee_name?`<div class="work-owner-box"><b>개인 지정</b><div class="muted">${esc(t.assignee_name)}${t.creator_name?' · 지시자 '+esc(t.creator_name):''}</div></div>`:''}${t.description?`<div style="font-size:13px;line-height:1.5">${esc(t.description).slice(0,130)}${t.description.length>130?'…':''}</div>`:''}<div class="work-mode-box"><span class="pill">${mode}</span><div class="muted" style="margin-top:6px">${t.reviewer_name?'승인자 '+esc(t.reviewer_name):t.completion_mode==='REVIEW'?'승인선 지정':'완료보고 후 완료'}</div></div><div class="row" style="justify-content:space-between"><span class="muted">마감 ${t.due_date||'-'}</span><div class="work-card-actions"><button class="btn secondary" onclick="event.stopPropagation();openSystemHistory(${t.id})">이력</button>${action}</div></div></div>`;
+ return `<div class="work-card-rich task" draggable="true" data-id="${t.id}" data-status="${t.status}" ondblclick="openTaskDetail(${t.id})"><div class="work-tags"><span class="pill">${esc(t.category||'업무')}</span><span class="pill">${t.assignee_id===currentUser.id?'담당':t.created_by===currentUser.id?'작성':t.reviewer_id===currentUser.id?'현재 승인':'공유'}</span>${t.priority==='URGENT'?'<span class="pill URGENT">긴급</span>':''}</div><h4>${esc(t.title)}</h4>${t.project_name?`<div style="font-size:15px;font-weight:700;color:#1f2937;margin:2px 0">📁 ${esc(t.project_name)}</div>`:''}<div class="muted">${t.team_name||'-'}</div>${t.assignee_name?`<div class="work-owner-box"><b>개인 지정</b><div class="muted">${esc(t.assignee_name)}${t.creator_name?' · 지시자 '+esc(t.creator_name):''}</div></div>`:''}${t.description?`<div style="font-size:13px;line-height:1.5">${esc(t.description).slice(0,130)}${t.description.length>130?'…':''}</div>`:''}<div class="work-mode-box"><span class="pill">${mode}</span><div class="muted" style="margin-top:6px">${t.reviewer_name?'승인자 '+esc(t.reviewer_name):t.completion_mode==='REVIEW'?'승인선 지정':'완료보고 후 완료'}</div></div><div class="row" style="justify-content:space-between"><span class="muted">마감 ${t.due_date||'-'}</span><div class="work-card-actions"><button class="btn secondary" onclick="event.stopPropagation();openSystemHistory(${t.id})">이력</button>${action}</div></div></div>`;
 }
-async function startTask(id){await api(`/api/tasks/${id}/move`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:'IN_PROGRESS',order:Date.now()%1000000,actor_id:currentUser.id})});toast('업무를 시작했습니다.');mywork(window._myWorkScope||'mine')}
+async function startTask(id){await api(`/api/tasks/${id}/move`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:'IN_PROGRESS',order:Date.now()%1000000,actor_id:currentUser.id})});toast('업무를 시작했습니다.');afterTaskAction()}
 
 function generalTaskModal(){
  let defaultTeam=currentUser.team_id||teams.find(t=>t.active)?.id;
@@ -921,7 +933,15 @@ function syncApprovalLine(){
 function generalTaskTeamChanged(tid=null){
  tid=+(tid||gt_team.value);
  let pick=document.getElementById('gt_assignee_pick');
- if(pick)pick.innerHTML=users.filter(u=>u.active!==0&&u.team_id==tid).map(u=>`<option value="${u.id}">${u.name} · ${u.rank||''}</option>`).join('');
+ if(pick){
+  // 주관팀을 먼저, 이어서 타 팀(협업) 인원까지 담당자로 지정 가능 (팀별 그룹)
+  let ordered=[...teams].filter(t=>t.active!==0).sort((a,b)=>(a.id==tid?-1:b.id==tid?1:0));
+  pick.innerHTML=ordered.map(t=>{
+   let mem=users.filter(u=>u.active!==0&&u.team_id==t.id);
+   if(!mem.length)return '';
+   return `<optgroup label="${esc(t.name)}${t.id==tid?' · 주관팀':''}">${mem.map(u=>`<option value="${u.id}">${esc(u.name)} · ${esc(u.rank||'')}</option>`).join('')}</optgroup>`;
+  }).join('');
+ }
  gt_category.innerHTML=teamCategories(tid).map(x=>`<option>${x}</option>`).join('');
  let approvers=users.filter(u=>u.active!==0&&(u.is_team_leader||u.role==='DIVISION_ADMIN'||(u.job_title||'').includes('대표')));
  gt_custom_approver.innerHTML=approvers.map(u=>`<option value="${u.id}">${u.name} · ${u.team_name||'총괄'} ${u.job_title||u.rank||''}</option>`).join('');
@@ -1071,7 +1091,7 @@ async function openProject(id,mode='DASHBOARD'){
  view.innerHTML=`<div class="context-hint">프로젝트 › ${p.name}</div>
  <div class="card"><div class="row" style="justify-content:space-between"><div><div class="row"><span class="pill">${p.approval_status==='APPROVED'?'승인완료':p.approval_status==='REJECTED'?'반려':'승인대기'}</span><span class="pill">${p.status==='HOLD'?'보류':(p.risk_status||'NORMAL')}</span></div><h2>${esc(p.name)}</h2><div class="muted">${esc(p.description||'')} · ${p.start_date||'-'} ~ ${p.due_date||'-'}</div></div><div class="row">${myApproval?`<button class="btn secondary" onclick="approveProject(${id},false)">반려</button><button class="btn" onclick="approveProject(${id},true)">승인</button>`:''}${p.status==='HOLD'?`<button class="btn secondary" onclick="holdProject(${id},false)">보류 해제</button>`:`<button class="btn secondary" onclick="holdProject(${id},true)">보류</button>`}<button class="btn secondary" style="color:#c0392b;border-color:#e6b8b2" onclick="deleteProject(${id})">삭제</button><button class="btn" onclick="taskModal(${id})">+ 세부 업무</button></div></div></div>
  <div class="card section"><div class="row" style="justify-content:space-between"><h3>프로젝트 TFT</h3><button class="btn secondary" onclick="projectTftModal(${id})">TFT 편집</button></div><div class="row">${(p.members||[]).map(m=>`<span class="check-card"><b>${m.name}</b> · ${m.team_name||''} ${m.member_role==='PM'||m.member_role==='LEADER'?'(리더)':''}</span>`).join('')||'<span class="muted">TFT 구성원 없음</span>'}</div><div class="muted" style="margin-top:8px">참여팀: ${(p.teams||[]).map(t=>t.name).join(', ')||'-'}</div></div>
- <div class="card section"><h3>결재선</h3>${(p.approvals||[]).map(a=>`<div class="req"><b>${a.approval_order}. ${a.approver_name}</b><span class="pill">${a.status==='APPROVED'?'승인':a.status==='REJECTED'?'반려':a.status==='SKIPPED'?'자동 제외':'대기'}</span><div class="muted">${a.team_name||''} ${a.job_title||a.rank||''}</div></div>`).join('')||'<div class="muted">별도 결재선 없음</div>'}</div>
+ <div class="card section"><h3>결재선</h3>${(p.approvals||[]).map(a=>`<div class="req"><b>${a.approval_order}. ${a.approver_name}</b><span class="pill">${a.status==='APPROVED'?'승인':a.status==='REJECTED'?'반려':a.status==='SKIPPED'?'자동 제외':'대기'}</span><div class="muted">${a.team_name||''} ${a.job_title||a.rank||''}</div>${a.comment?`<div style="margin-top:6px;font-size:13px;background:#f6f7f9;padding:6px 9px;border-radius:6px;white-space:pre-wrap">💬 ${esc(a.comment)}</div>`:''}</div>`).join('')||'<div class="muted">별도 결재선 없음</div>'}</div>
  <div class="view-tabs">${[['DASHBOARD','대시보드'],['KANBAN','칸반'],['TIMELINE','타임라인'],['TABLE','테이블'],['CALENDAR','캘린더']].map(v=>`<button class="${mode===v[0]?'active':''}" onclick="openProject(${id},'${v[0]}')">${v[1]}</button>`).join('')}</div>
  <div id="projectView">${projectViewHtml(mode,p,tasks)}</div>`;
  if(mode==='KANBAN')enableBoardDrag();
@@ -1250,12 +1270,13 @@ async function openWorkspace(tid){
  ['OVERVIEW','오버뷰'],['TASKS','업무/프로젝트'],['SCHEDULE','일정 관리'],['MEETING','회의록'],['PURCHASE','구매내역'],
  ['BOOK','독서토론'],['CHECKLIST','체크리스트'],['RESOURCE','자료/링크'],['DATACENTER','데이터 관리 센터'],['DATABOARD','데이터보드'],['KPI','KPI']
  ];
- if(tid===1) common.splice(6,0,['REFUND','환불과정 관리'],['MCC_REVIEW','교재·법령 검수']);
+ if(tid===1) common.splice(2,0,['FILMING','강의촬영(콘.제작)']);
+ if(tid===1) common.splice(8,0,['REFUND','환불과정 관리'],['MCC_REVIEW','교재·법령 검수']);
  if(tid===6){
    common.splice(2,0,['CUSTOMER','고객 DB / 온보딩'],['CONSULT','상담 관리'],['KNOWLEDGE','상담 지식DB'],['STUDY','상품/과정 스터디']);
  }
  if(tid===2){
-   common.splice(2,0,['MKT_OVERVIEW','마케팅 통합현황'],['MKT_CHANNEL','채널 운영'],['MKT_CAMPAIGN','광고·캠페인'],['MKT_CONTENT','콘텐츠 캘린더'],['MKT_LEAD','리드·유입 관리'],['MKT_EVENT','행사·프로모션'],['MKT_COLLAB','협업 요청'],['MKT_RESULT','성과 데이터']);
+   common.splice(2,0,['MKT_OVERVIEW','마케팅 통합현황'],['MKT_CHANNEL','채널 운영'],['MKT_CAMPAIGN','광고·캠페인'],['MKT_CONTENT','콘텐츠 캘린더'],['MKT_LEAD','리드·유입 관리'],['MKT_EVENT','행사·프로모션'],['MKT_VIDEO','영상 제작 현황'],['MKT_ANALYSIS','채널 분석(주간)'],['MKT_COLLAB','협업 요청'],['MKT_RESULT','성과 데이터']);
  }
  if(tid===3){
    common.splice(2,0,['PLAN_OVERVIEW','기획 통합현황'],['PLAN_LIVE','라이브특강'],['PLAN_PROMO','프로모션·이벤트'],['PLAN_PRODUCT','상품·가격 관리'],['PLAN_B2B','B2B 판매 관리'],['PLAN_SITE','사이트 운영']);
@@ -1328,6 +1349,9 @@ async function workspaceSection(tid,code,btn){
  if(code==='MKT_EVENT'){return marketingEvents(tid)}
  if(code==='MKT_COLLAB'){return marketingCollab(tid)}
  if(code==='MKT_RESULT'){return marketingResults(tid)}
+ if(code==='FILMING'){return filmingSchedule(tid)}
+ if(code==='MKT_VIDEO'){return marketingVideos(tid)}
+ if(code==='MKT_ANALYSIS'){return marketingWeekly(tid)}
  if(code==='CUSTOMER'){return serviceCustomers(tid)}
  if(code==='CONSULT'){return serviceConsultations(tid)}
  if(code==='KNOWLEDGE'){return serviceKnowledge(tid)}
@@ -1417,17 +1441,9 @@ function adminOrgUsers(data){
  body.innerHTML=`<div class="card"><div class="row" style="justify-content:space-between"><div><h3>조직 및 계정 관리</h3><div class="muted">조직도 변경은 업무·프로젝트의 팀·부서 선택 항목에도 반영됩니다.</div></div><div class="row"><button class="btn secondary" onclick="adminTeamModal()">조직도 수정</button><button class="btn" onclick="adminUserCreateModal()">+ 조직원 아이디 개설</button></div></div></div>
  <div class="admin-org-grid section">${data.teams.filter(t=>t.active!==0).map(t=>`<div class="admin-org-card"><div class="row"><span class="admin-org-icon">${t.name.slice(0,1)}</span><div><b>${esc(t.name)}</b><div class="muted">${t.active_count}명 · 퇴사 ${t.retired_count}명</div></div></div><div class="admin-team-members">${data.users.filter(u=>u.team_id===t.id&&u.active!==0).slice(0,8).map(u=>`<span class="pill">${esc(u.name)}</span>`).join('')||'<span class="muted">구성원 없음</span>'}</div></div>`).join('')}</div>
  <div class="card section"><div class="row" style="justify-content:space-between"><div><div class="page-kicker">USER ACCOUNTS</div><h3>조직원 및 로그인 아이디</h3></div><div class="row"><button class="btn secondary" onclick="toggleAdminRetired()">${window.adminShowRetired?'재직자만':'퇴사자 포함'}</button><button class="btn" onclick="adminUserCreateModal()">+ 아이디 개설</button></div></div>
- <table><thead><tr><th>이름·아이디</th><th>소속</th><th>직책·직급</th><th>전화번호·내선</th><th>이메일</th><th>계정 상태</th><th>권한 적용</th></tr></thead><tbody>${data.users.filter(u=>window.adminShowRetired||u.active!==0).map(u=>`<tr style="${u.active===0?'opacity:.55':''}"><td><b>${esc(u.name)}</b><div class="muted">${esc(u.login_id||'미설정')}</div></td><td>${u.team_name||'콘텐츠사업부 총괄'}</td><td>${u.job_title||'-'}<div class="muted">${u.rank||'-'}</div></td><td>${u.phone||'-'}<div class="muted">내선 ${u.extension||'-'}</div></td><td>${u.email||'-'}</td><td><span class="pill">${u.active===0?'퇴사':u.account_status==='LOCKED'?'잠금':u.account_status==='LEAVE'?'휴직':'사용 중'}</span></td><td><div class="row" style="gap:6px"><button class="btn secondary" onclick="adminUserEditModal(${u.id})">개별 권한 설정</button><button class="btn secondary" style="color:#b54708;border-color:#f1c27d" onclick="adminResetPassword(${u.id},'${esc(u.name)}')">비밀번호 초기화</button></div></td></tr>`).join('')}</tbody></table></div>`;
+ <table><thead><tr><th>이름·아이디</th><th>소속</th><th>직책·직급</th><th>전화번호·내선</th><th>이메일</th><th>계정 상태</th><th>권한 적용</th></tr></thead><tbody>${data.users.filter(u=>window.adminShowRetired||u.active!==0).map(u=>`<tr style="${u.active===0?'opacity:.55':''}"><td><b>${esc(u.name)}</b><div class="muted">${esc(u.login_id||'미설정')}</div></td><td>${u.team_name||'콘텐츠사업부 총괄'}</td><td>${u.job_title||'-'}<div class="muted">${u.rank||'-'}</div></td><td>${u.phone||'-'}<div class="muted">내선 ${u.extension||'-'}</div></td><td>${u.email||'-'}</td><td><span class="pill">${u.active===0?'퇴사':u.account_status==='LOCKED'?'잠금':u.account_status==='LEAVE'?'휴직':'사용 중'}</span></td><td><button class="btn secondary" onclick="adminUserEditModal(${u.id})">개별 권한 설정</button></td></tr>`).join('')}</tbody></table></div>`;
 }
 function toggleAdminRetired(){window.adminShowRetired=!window.adminShowRetired;adminCenter('ORG')}
-async function adminResetPassword(uid,name){
- if(!isSuperAdmin()){alert('최고관리자만 비밀번호를 초기화할 수 있습니다.');return}
- if(!confirm(`${name}님의 비밀번호를 초기화하시겠습니까?\n초기 비밀번호는 1234로 변경됩니다.`))return;
- try{
-  let r=await api('/api/reset-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_user_id:uid})});
-  alert(`${r.target_name||name}님의 비밀번호를 초기화했습니다.\n\n임시 비밀번호: ${r.temporary_password||'1234'}\n\n로그인 후 비밀번호 변경을 안내해주세요.`);
- }catch(e){alert(e.message||'비밀번호 초기화 중 오류가 발생했습니다.')}
-}
 function adminTeamModal(){
  showModal('조직도 수정',`<div class="muted">팀 이름과 사용 여부를 관리합니다. 비활성화해도 기존 업무 이력은 유지됩니다.</div>${(_adminData.teams||[]).map(t=>`<div class="row card" style="justify-content:space-between"><div><b>${esc(t.name)}</b><div class="muted">재직 ${t.active_count}명</div></div><button class="btn secondary" onclick="adminEditTeam(${t.id})">수정</button></div>`).join('')}<button class="btn" onclick="adminAddTeam()">+ 팀 추가</button>`);
 }
@@ -1642,6 +1658,138 @@ async function saveCollab(){await api('/api/marketing/collab',{method:'POST',hea
 async function marketingResults(tid){let rows=await api('/api/marketing/performance');document.getElementById('wsBody').innerHTML=`<div class="row" style="justify-content:space-between"><div><h3>성과 데이터</h3><div class="muted">월별 실제 운영 결과를 기록합니다. 이후 평가 모듈의 원천 데이터로 활용합니다.</div></div><button class="btn" onclick="resultModal()">+ 성과 데이터</button></div><table class="section"><thead><tr><th>월</th><th>데이터유형</th><th>대상</th><th>수치</th><th>텍스트</th><th>담당</th><th>메모</th></tr></thead><tbody>${rows.map(x=>`<tr><td>${x.snapshot_month}</td><td>${x.data_type}</td><td><b>${esc(x.reference_name)}</b></td><td>${x.value_numeric}</td><td>${esc(x.value_text||'')}</td><td>${x.owner_name||''}</td><td>${esc(x.notes||'')}</td></tr>`).join('')}</tbody></table>`}
 function resultModal(){showModal('성과 데이터 등록',`<label>월</label><input id="rs_month" type="month"><label>데이터 유형</label><input id="rs_type" placeholder="조회수, 방문자, 클릭, 전환, 리드 등"><label>대상</label><input id="rs_ref"><label>수치</label><input id="rs_num" type="number"><label>텍스트 값</label><input id="rs_text"><label>담당자</label><select id="rs_owner">${users.filter(u=>u.active!==0&&u.team_id==2).map(u=>`<option value="${u.id}">${u.name}</option>`)}</select><label>메모</label><textarea id="rs_note"></textarea><button class="btn" onclick="saveResult()">저장</button>`)}
 async function saveResult(){await api('/api/marketing/performance',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({snapshot_month:rs_month.value,data_type:rs_type.value,reference_name:rs_ref.value,value_numeric:+rs_num.value||0,value_text:rs_text.value,owner_id:+rs_owner.value,notes:rs_note.value})});closeModal();marketingResults(2)}
+
+/* ===================== 콘텐츠 제작(콘.제작) 강의촬영 스케줄 ===================== */
+function triBar(label,rate,color){return `<div style="margin:6px 0"><div class="row" style="justify-content:space-between;font-size:12px"><span class="muted">${label}</span><b>${rate}%</b></div><div class="mini-progress"><span style="width:${rate}%;background:${color}"></span></div></div>`}
+async function filmingSchedule(tid){
+ let body=document.getElementById('wsBody');
+ let [ov,courses]=await Promise.all([api('/api/filming/overview'),api('/api/filming/courses')]);
+ window._filmCourses=courses;
+ let fieldColor={'소방':'#ef6a5b','안전':'#22a06b','전기':'#4f83b0'};
+ body.innerHTML=`
+ <div class="row" style="justify-content:space-between"><div><div class="page-kicker">CONTENT PRODUCTION · TOP EVENT</div><h3>강의촬영(콘.제작) 스케줄</h3><div class="muted">TOP EVENT 강의촬영 진행 현황을 과정별 촬영·코딩·정산 진척률로 관리합니다. (구글시트 API 연동 예정 — 현재는 개발 검토용 데이터)</div></div><button class="btn" onclick="filmingCourseModal()">+ 과정 등록</button></div>
+ <div class="grid4 section">
+   ${metric('전체 과정',ov.courses)}
+   ${metric('진행중 / 종강',ov.active+' / '+ov.ended)}
+   ${metric('전체 클립',ov.total_clips)}
+   ${metric('정산 진척률',ov.settled_rate+'%')}
+ </div>
+ <div class="chart-card section"><div class="page-kicker">OVERALL PROGRESS</div><h3>전체 진척률</h3>
+   ${triBar('촬영 진척률 (촬영 '+ov.shot+'/'+ov.total_clips+')',ov.shot_rate,'#ef6a5b')}
+   ${triBar('코딩 진척률 (코딩 '+ov.coded+'/'+ov.total_clips+')',ov.coded_rate,'#4f83b0')}
+   ${triBar('정산 진척률 (정산 '+ov.settled+'/'+ov.total_clips+')',ov.settled_rate,'#22a06b')}
+ </div>
+ <h4 style="margin:16px 0 6px">과정별 진척 현황</h4>
+ <div class="workspace-grid section" style="grid-template-columns:repeat(2,1fr)">
+ ${courses.map(co=>`<div class="card module-card" onclick="filmingCourseDetail(${co.id})">
+   <div class="row" style="justify-content:space-between;align-items:flex-start"><div><span class="pill" style="background:${fieldColor[co.field]||'#8b5cf6'}22;color:${fieldColor[co.field]||'#8b5cf6'}">${co.field||'-'}</span> ${co.ended?'<span class="pill">종강</span>':'<span class="pill URGENT">진행중</span>'}<h3 style="margin:6px 0 2px">${esc(co.name)}</h3><div class="muted">${esc(co.professor||'')} · 강좌코드 ${co.course_code||'-'} · 클립 ${co.total_clips}개</div></div><div style="text-align:right"><div class="muted" style="font-size:11px">교재</div><div style="font-size:12px">${esc(co.book||'-')}</div></div></div>
+   ${triBar('촬영',co.shot_rate,'#ef6a5b')}
+   ${triBar('코딩',co.coded_rate,'#4f83b0')}
+   ${triBar('정산',co.settled_rate,'#22a06b')}
+   <div class="muted" style="font-size:12px;margin-top:6px">${esc(co.note||'')}</div>
+ </div>`).join('')||'<div class="muted">등록된 촬영 과정이 없습니다.</div>'}
+ </div>`;
+}
+async function filmingCourseDetail(id){
+ let co=await api('/api/filming/courses/'+id);
+ let rowStat=c=>{let shot=(c.video_len||'').trim(), coded=(c.coding_date||'').trim(), settled=c.settle_status==='정산완료';
+   return `<span class="pill" style="background:${shot?'#fdecea':'#eef1f5'};color:${shot?'#c0392b':'#98a4b3'}">촬영${shot?'✓':'—'}</span> <span class="pill" style="background:${coded?'#e8f0f8':'#eef1f5'};color:${coded?'#2c5f8a':'#98a4b3'}">코딩${coded?'✓':'—'}</span> <span class="pill" style="background:${settled?'#e7f6ee':'#eef1f5'};color:${settled?'#177a4a':'#98a4b3'}">${settled?'정산완료':'미정산'}</span>`}
+ showModal(`${co.name} · 클립 상세`,`
+  <div class="muted" style="margin-bottom:8px">${co.field||''} · ${esc(co.professor||'')} · 강좌코드 ${co.course_code||'-'} · ${co.ended?'종강':'진행중'}</div>
+  <div class="grid4"><div>촬영 ${co.shot}/${co.total_clips} (${co.shot_rate}%)</div><div>코딩 ${co.coded}/${co.total_clips} (${co.coded_rate}%)</div><div>정산 ${co.settled}/${co.total_clips} (${co.settled_rate}%)</div><div>클립 ${co.total_clips}개</div></div>
+  <table class="section"><thead><tr><th>clip</th><th>과목명</th><th>촬영일</th><th>촬영실</th><th>영상시간</th><th>코딩일</th><th>상태</th><th>정산</th></tr></thead><tbody>
+  ${co.clips.map(cl=>`<tr><td>${cl.clip_no||''}</td><td>${esc(cl.subject||'')}</td><td>${cl.shoot_date||'—'}</td><td>${cl.room||'—'}</td><td>${cl.video_len||'—'}</td><td>${cl.coding_date||'—'}</td><td>${rowStat(cl)}</td><td><button class="btn secondary" style="padding:2px 8px" onclick="toggleSettle(${cl.id},'${cl.settle_status==='정산완료'?'미정산':'정산완료'}',${id})">${cl.settle_status==='정산완료'?'정산취소':'정산완료'}</button></td></tr>`).join('')}
+  </tbody></table>`);
+ modal.classList.add('full-modal');
+}
+async function toggleSettle(clipId,status,courseId){await api('/api/filming/clips/'+clipId,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({settle_status:status})});toast('정산 상태를 변경했습니다.');filmingCourseDetail(courseId)}
+function filmingCourseModal(){showModal('촬영 과정 등록',`<label>과정분야</label><select id="fc_field"><option>소방</option><option>안전</option><option>전기</option><option>공통</option></select><label>과정명칭</label><input id="fc_name"><label>교재</label><input id="fc_book"><label>담당교수</label><input id="fc_prof"><label>강좌코드</label><input id="fc_code"><label>비고</label><input id="fc_note"><button class="btn" onclick="saveFilmingCourse()">저장</button>`)}
+async function saveFilmingCourse(){if(!fc_name.value.trim())return toast('과정명칭을 입력하세요.');await api('/api/filming/courses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({field:fc_field.value,name:fc_name.value.trim(),book:fc_book.value,professor:fc_prof.value,course_code:fc_code.value,note:fc_note.value})});closeModal();toast('과정을 등록했습니다.');filmingSchedule(1)}
+
+/* ===================== 마케팅 영상 제작 현황 ===================== */
+async function marketingVideos(tid){
+ let body=document.getElementById('wsBody');
+ let st=await api('/api/marketing/video-stats');
+ window._mvStats=st;
+ let majors=Object.keys(st.by_major);
+ let ctypes=Object.keys(st.by_content_type);
+ let progs=Object.keys(st.by_progress);
+ body.innerHTML=`
+ <div><div class="page-kicker">MARKETING VIDEO PRODUCTION</div><h3>마케팅용 영상 제작 현황</h3><div class="muted">유튜브·쇼츠·샘플영상 등 마케팅 영상 제작 로그입니다. 총 ${st.total.toLocaleString()}건 (${st.months[0]||''} ~ ${st.months[st.months.length-1]||''}).</div></div>
+ <div class="grid4 section">
+   ${metric('전체 영상',st.total.toLocaleString())}
+   ${metric('소방 / 안전',(st.by_major['소방']||0)+' / '+(st.by_major['안전']||0))}
+   ${metric('전기 / 공통',(st.by_major['전기']||0)+' / '+(st.by_major['공통']||0))}
+   ${metric('완료',(st.by_progress['완료']||0).toLocaleString())}
+ </div>
+ <div class="chart-card section"><div class="page-kicker">월별 제작량</div><h3>월별 영상 제작 추이</h3>${barChart(st.by_month.map(x=>({label:x.month.slice(2),value:x.count})))}</div>
+ <div class="marketing-columns section">
+   <div class="chart-card"><div class="page-kicker">콘텐츠 구분별</div>${Object.entries(st.by_content_type).map(([k,v])=>`<div class="legend-row"><span>${k}</span><b>${v.toLocaleString()}</b></div>`).join('')}</div>
+   <div class="chart-card"><div class="page-kicker">PM별 (상위)</div>${Object.entries(st.by_pm).map(([k,v])=>`<div class="legend-row"><span>${k}</span><b>${v.toLocaleString()}</b></div>`).join('')}</div>
+ </div>
+ <div class="card section"><div class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
+   <div><div class="muted" style="font-size:12px">월</div><select id="mv_month" onchange="loadMktVideos()" style="width:auto"><option value="">전체</option>${st.months.slice().reverse().map(m=>`<option value="${m}">${m}</option>`).join('')}</select></div>
+   <div><div class="muted" style="font-size:12px">대분류</div><select id="mv_major" onchange="loadMktVideos()" style="width:auto"><option value="">전체</option>${majors.map(m=>`<option>${m}</option>`).join('')}</select></div>
+   <div><div class="muted" style="font-size:12px">콘텐츠 구분</div><select id="mv_ctype" onchange="loadMktVideos()" style="width:auto"><option value="">전체</option>${ctypes.map(m=>`<option>${m}</option>`).join('')}</select></div>
+   <div><div class="muted" style="font-size:12px">진행사항</div><select id="mv_prog" onchange="loadMktVideos()" style="width:auto"><option value="">전체</option>${progs.map(m=>`<option>${m}</option>`).join('')}</select></div>
+   <div style="flex:1"><div class="muted" style="font-size:12px">검색(주제/과정/강사/편집자)</div><input id="mv_q" oninput="mvDebounce()" placeholder="키워드"></div>
+   <button class="btn" onclick="mktVideoModal()">+ 영상 등록</button>
+ </div></div>
+ <div id="mv_table"></div>`;
+ loadMktVideos();
+}
+let _mvTimer=null;function mvDebounce(){clearTimeout(_mvTimer);_mvTimer=setTimeout(loadMktVideos,350)}
+async function loadMktVideos(){
+ let qs=new URLSearchParams();
+ let m=document.getElementById('mv_month'); if(m&&m.value)qs.set('month',m.value);
+ let mj=document.getElementById('mv_major'); if(mj&&mj.value)qs.set('major',mj.value);
+ let ct=document.getElementById('mv_ctype'); if(ct&&ct.value)qs.set('content_type',ct.value);
+ let pr=document.getElementById('mv_prog'); if(pr&&pr.value)qs.set('progress',pr.value);
+ let kw=document.getElementById('mv_q'); if(kw&&kw.value.trim())qs.set('q',kw.value.trim());
+ let rows=await api('/api/marketing/videos?'+qs.toString());
+ let progPill=p=>({'완료':'#22a06b','진행중':'#e08e0b','진행예정':'#4f83b0','취소':'#98a4b3'}[p]||'#8b5cf6');
+ document.getElementById('mv_table').innerHTML=`<div class="muted" style="margin:6px 0">${rows.length}건 표시 (최대 500)</div><table class="section"><thead><tr><th>년월</th><th>대분류</th><th>중분류</th><th>구분</th><th>주제</th><th>촬영일</th><th>편집완료</th><th>PM</th><th>강사</th><th>편집자</th><th>진행</th><th>URL</th></tr></thead><tbody>
+ ${rows.map(r=>`<tr><td>${r.ym||''}</td><td>${r.cat_major||''}</td><td>${esc(r.cat_minor||'')}</td><td>${esc(r.content_type||'')}</td><td>${esc(r.topic||'')}</td><td>${r.shoot_date||'—'}</td><td>${r.edit_done||'—'}</td><td>${esc(r.pm||'')}</td><td>${esc(r.instructor||'')}</td><td>${esc(r.editor||'')}</td><td><span class="pill" style="background:${progPill(r.progress)}22;color:${progPill(r.progress)}">${r.progress||''}</span></td><td>${r.url&&r.url.startsWith('http')?`<a href="${esc(r.url)}" target="_blank">열기</a>`:esc((r.url||'').slice(0,20))}</td></tr>`).join('')}
+ </tbody></table>`;
+}
+function mktVideoModal(){showModal('마케팅 영상 등록',`<label>년/월 표기(예: 26년 9월)</label><input id="mvf_ym"><label>월(YYYY-MM)</label><input id="mvf_month" placeholder="2026-09"><label>대분류</label><select id="mvf_major"><option>소방</option><option>안전</option><option>전기</option><option>공통</option></select><label>중분류(과정명)</label><input id="mvf_minor"><label>콘텐츠 구분</label><input id="mvf_ctype" placeholder="강의/롱, 홍보/기획쇼츠 ..."><label>주제</label><input id="mvf_topic"><label>촬영일</label><input id="mvf_shoot"><label>편집완료(예정)</label><input id="mvf_edit"><label>PM</label><input id="mvf_pm"><label>강사</label><input id="mvf_inst"><label>편집자</label><input id="mvf_editor"><label>진행사항</label><select id="mvf_prog"><option>진행예정</option><option>진행중</option><option>완료</option><option>취소</option></select><label>URL</label><input id="mvf_url"><button class="btn" onclick="saveMktVideo()">저장</button>`)}
+async function saveMktVideo(){await api('/api/marketing/videos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ym:mvf_ym.value,month:mvf_month.value,cat_major:mvf_major.value,cat_minor:mvf_minor.value,content_type:mvf_ctype.value,topic:mvf_topic.value,shoot_date:mvf_shoot.value,edit_done:mvf_edit.value,pm:mvf_pm.value,instructor:mvf_inst.value,editor:mvf_editor.value,progress:mvf_prog.value,url:mvf_url.value})});closeModal();toast('영상을 등록했습니다.');marketingVideos(2)}
+
+/* ===================== 마케팅 채널 분석(주간) ===================== */
+function sparkline(points,color){if(!points.length)return '';let w=220,h=44,min=Math.min(...points),max=Math.max(...points),rng=(max-min)||1;let pts=points.map((v,i)=>`${(i/(points.length-1||1)*w).toFixed(1)},${(h-((v-min)/rng)*(h-6)-3).toFixed(1)}`).join(' ');return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2"/></svg>`}
+function barChart(data){if(!data.length)return '';let max=Math.max(...data.map(d=>d.value))||1;return `<div style="display:flex;align-items:flex-end;gap:3px;height:120px;overflow-x:auto;padding-top:8px">${data.map(d=>`<div title="${d.label}: ${d.value}" style="display:flex;flex-direction:column;align-items:center;gap:3px;min-width:26px"><div style="font-size:10px" class="muted">${d.value}</div><div style="width:20px;background:#4f83b0;border-radius:3px 3px 0 0;height:${Math.max(2,d.value/max*90)}px"></div><div style="font-size:9px;transform:rotate(-45deg);white-space:nowrap;color:#98a4b3;margin-top:4px">${d.label}</div></div>`).join('')}</div>`}
+async function marketingWeekly(tid){
+ let body=document.getElementById('wsBody');
+ let snap=await api('/api/marketing/weekly-latest');
+ let fmt=(v,m)=>m==='revenue_usd'?('$'+Number(v).toLocaleString()):Number(v).toLocaleString();
+ let delta=d=>d==null?'':`<span style="font-size:11px;color:${d>0?'#22a06b':d<0?'#c0392b':'#98a4b3'}">${d>0?'▲':d<0?'▼':''}${Math.abs(d).toLocaleString()}</span>`;
+ let pick=(cat,metric)=>snap.latest.filter(x=>x.category===cat&&x.metric===metric);
+ let ytSubs=pick('youtube','subscribers'), ytViews=pick('youtube','views'), ytRev=pick('youtube','revenue_usd');
+ let card=(title,items,metric)=>`<div class="marketing-card"><div class="page-kicker">${title}</div>${items.map(x=>`<div class="row" style="justify-content:space-between;padding:3px 0"><span>${x.channel}</span><b>${fmt(x.value,metric)} ${delta(x.delta)}</b></div>`).join('')||'<div class="muted">데이터 없음</div>'}</div>`;
+ body.innerHTML=`
+ <div><div class="page-kicker">CHANNEL ANALYTICS · WEEKLY</div><h3>마케팅 채널 분석 (주간)</h3><div class="muted">매주 금요일 업데이트 · 최신 기준 ${snap.last_week||'-'} · 주간 스냅숏 ${snap.weeks.length}주 누적</div></div>
+ <div class="marketing-metric-row section" style="grid-template-columns:repeat(4,1fr)">
+   ${ytSubs.map(x=>`${metric('구독자 · '+x.channel,Number(x.value).toLocaleString())}`).join('')}
+ </div>
+ <div class="chart-card section"><div class="row" style="justify-content:space-between"><div class="page-kicker">유튜브 구독자 추이</div><select id="wk_ch" onchange="drawWeeklyTrend()" style="width:auto">${ytSubs.map(x=>`<option>${x.channel}</option>`).join('')}</select></div><div id="wk_trend" style="margin-top:8px"></div></div>
+ <div class="marketing-grid section">
+   ${card('유튜브 구독자',ytSubs,'subscribers')}
+   ${card('유튜브 조회수(누적)',ytViews,'views')}
+   ${card('유튜브 수익(USD)',ytRev,'revenue_usd')}
+   ${card('블로그 방문수(주간)',pick('blog','visits'),'visits')}
+   ${card('SNS 팔로우/친구',pick('sns','followers').concat(pick('sns','friends')),'followers')}
+   ${card('카페 회원수',pick('cafe','members'),'members')}
+ </div>
+ <div class="chart-card section"><div class="page-kicker">브랜드 월간 검색량 (PC, 최신주)</div><table><thead><tr><th>브랜드</th><th>PC</th><th>모바일</th></tr></thead><tbody>${(()=>{let pc=pick('search','search_pc'),mo=pick('search','search_mobile');let moMap={};mo.forEach(x=>moMap[x.channel]=x.value);return pc.sort((a,b)=>b.value-a.value).map(x=>`<tr><td>${x.channel}</td><td>${Number(x.value).toLocaleString()}</td><td>${(moMap[x.channel]||0).toLocaleString()}</td></tr>`).join('')})()}</tbody></table></div>`;
+ drawWeeklyTrend();
+}
+async function drawWeeklyTrend(){
+ let sel=document.getElementById('wk_ch');if(!sel)return;let ch=sel.value;
+ let rows=await api('/api/marketing/weekly?category=youtube&metric=subscribers&channel='+encodeURIComponent(ch));
+ let vals=rows.map(r=>r.value);
+ let el=document.getElementById('wk_trend');
+ el.innerHTML=`${sparkline(vals,'#ef6a5b')}<div class="row" style="justify-content:space-between;font-size:11px" class="muted"><span>${rows[0]?.week||''}</span><span>${rows.length?rows[rows.length-1].week:''} · 현재 ${vals.length?vals[vals.length-1].toLocaleString():0}명</span></div>`;
+}
 
 async function workspaceSchedule(tid){
  let tasks=await api('/api/tasks?team_id='+tid),today=new Date();
@@ -1952,7 +2100,7 @@ function syncApproverSelection(){
  }
 }
 function teamCategories(tid){
- let m={1:['교재제작','강의촬영','시험복원','교재·법령 검수','강사관리','기타'],2:['광고','콘텐츠','캠페인','행사','협업요청','기타'],3:['교재','상품','특강','B2B','사이트운영','기타'],4:['과정개발','과정심사','국비운영','콘텐츠제작','LMS운영','기타'],6:['고객상담','회원관리','상품문의','환불','민원','기타']};return m[tid]||['일반업무','프로젝트','협업','기타'];
+ let m={1:['교재제작','강의촬영','교재제작+강의촬영','시험복원','교재·법령 검수','강사관리','기타'],2:['광고','콘텐츠','캠페인','행사','협업요청','기타'],3:['교재','상품','특강','B2B','사이트운영','기타'],4:['과정개발','과정심사','국비운영','콘텐츠제작','LMS운영','기타'],6:['고객상담','회원관리','상품문의','환불','민원','기타']};return m[tid]||['일반업무','프로젝트','협업','기타'];
 }
 function newWorkTeamChanged(teamId=null){
  let tid=+(teamId||f_team.value),members=users.filter(u=>u.active!==0&&u.team_id==tid);
@@ -2073,6 +2221,8 @@ async function openTaskDetail(id){
  window._tdCoassignees=(t.assignees||[]).map(a=>({user_id:a.user_id,role_label:a.role_label||'',name:a.user_name}));
  window._tdApprovers=(t.approvals||[]).filter(a=>a.status!=='SKIPPED').map(a=>({user_id:a.approver_id,name:a.approver_name}));
  let eligible=users.filter(u=>u.active!==0&&(u.is_team_leader||u.role==='DIVISION_ADMIN'||(u.job_title||'').includes('대표')||(u.job_title||'').includes('이사')));
+ let _rr=t.latest_review_request;
+ let revAttachHtml=(_rr&&(_rr.files||[]).length)?`<h3>검토요청 첨부</h3>${(_rr.files||[]).map(f=>`<div class="row" style="justify-content:space-between;gap:8px;margin-bottom:6px"><span>${esc(f.original_name)} · ${formatBytes(f.size_bytes)}</span><a class="btn secondary" target="_blank" href="/uploads/task_reviews/${_rr.id}/${encodeURIComponent(f.stored_name)}">열기</a></div>`).join('')}`:'';
  showModal('업무 상세',`<div class="detail-grid"><div>
  <label>업무명</label><input id="td_title" value="${esc(t.title)}">
  <div class="card" style="margin:10px 0"><b>완료 방식</b>
@@ -2097,7 +2247,8 @@ async function openTaskDetail(id){
  <h3>댓글</h3>${comments.map(c=>`<div class="comment"><b>${c.user_name||'사용자'}</b><div>${esc(c.body)}</div><div class="muted">${c.created_at||''}</div></div>`).join('')||'<div class="muted">댓글이 없습니다.</div>'}
  <textarea id="td_comment" placeholder="업무 관련 댓글을 입력하세요"></textarea><button class="btn secondary" onclick="addTaskComment(${id})">댓글 등록</button>
  </div><div><h3>업무 정보</h3><div class="profile"><b>${t.project_name?esc(t.project_name):'개별 업무'}</b><div class="muted">${t.team_name||'-'} · ${t.assignee_name||'미배정'}</div></div>
- <h3>변경 이력</h3>${activity.map(a=>`<div class="activity"><b>${a.actor_name||'시스템'}</b> · ${a.action}<br><span class="muted">${esc(a.old_value||'')} → ${esc(a.new_value||'')} · ${a.created_at||''}</span></div>`).join('')||'<div class="muted">이력이 없습니다.</div>'}</div></div>`);
+ ${revAttachHtml}
+ <details style="margin-top:14px"><summary style="cursor:pointer;color:var(--muted);font-weight:600;list-style:none">변경 이력 보기</summary><div style="margin-top:8px">${activity.map(a=>`<div class="activity"><b>${a.actor_name||'시스템'}</b> · ${a.action}<br><span class="muted">${esc(a.old_value||'')} → ${esc(a.new_value||'')} · ${a.created_at||''}</span></div>`).join('')||'<div class="muted">이력이 없습니다.</div>'}</div></details></div></div>`);
  tdRenderApprovers();tdRenderCoassignees();
 }
 function tdToggleApproval(){let w=document.getElementById('td_approval_wrap');if(w)w.style.display=document.getElementById('td_completion').value==='REVIEW'?'block':'none';}
@@ -2137,9 +2288,9 @@ async function reviewRequestModal(id){
 function handleReviewFiles(files){window._reviewFiles=[...files].slice(0,5);rr_file_list.innerHTML=window._reviewFiles.length?window._reviewFiles.map((f,i)=>`<div class="row" style="justify-content:space-between;padding:8px"><span>${esc(f.name)} · ${formatBytes(f.size)}</span><button class="btn secondary" onclick="removeReviewFile(${i})">삭제</button></div>`).join(''):'<div class="muted">등록한 파일이 없습니다.</div>'}
 function removeReviewFile(i){window._reviewFiles.splice(i,1);handleReviewFiles(window._reviewFiles)}
 function fileToBase64(f){return new Promise((resolve,reject)=>{let r=new FileReader();r.onload=()=>resolve(String(r.result).split(',')[1]||'');r.onerror=reject;r.readAsDataURL(f)})}
-async function submitReviewRequest(id){if(!rr_confirm.checked){alert('검토 요청 내용 확인에 체크해주세요.');return}let files=[];for(let f of (window._reviewFiles||[]))files.push({name:f.name,mime_type:f.type||'application/octet-stream',data_base64:await fileToBase64(f)});await api(`/api/tasks/${id}/review-request`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requester_id:currentUser.id,comment:rr_comment.value,files})});closeModal();toast('검토를 요청했습니다.');mywork(window._myWorkScope||'mine')}
+async function submitReviewRequest(id){if(!rr_confirm.checked){alert('검토 요청 내용 확인에 체크해주세요.');return}let files=[];for(let f of (window._reviewFiles||[]))files.push({name:f.name,mime_type:f.type||'application/octet-stream',data_base64:await fileToBase64(f)});await api(`/api/tasks/${id}/review-request`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requester_id:currentUser.id,comment:rr_comment.value,files})});closeModal();toast('검토를 요청했습니다.');afterTaskAction()}
 async function openReviewRequest(id){let [t,r]=await Promise.all([api('/api/tasks/'+id),api(`/api/tasks/${id}/review-request`)]);if(r.error){alert(r.error);return}let current=r.current_approver||(r.approvals||[]).find(a=>a.status==='WAITING'),canApprove=current&&current.approver_id===currentUser.id;showModal('검토 요청 내역',`<div class="eyebrow">REVIEW REQUEST</div><h2>${esc(t.title)}</h2><div class="review-request-box"><b>검토 코멘트</b><div style="margin-top:8px">${esc(r.comment||'코멘트 없음')}</div><div class="muted">${formatDateTime(r.created_at)} · ${esc(r.requester_name||'')}</div></div><div class="card"><h3>첨부파일</h3>${(r.files||[]).map(f=>`<div class="row" style="justify-content:space-between"><span>${esc(f.original_name)} · ${formatBytes(f.size_bytes)}</span><a class="btn secondary" target="_blank" href="/uploads/task_reviews/${r.id}/${encodeURIComponent(f.stored_name)}">열기</a></div>`).join('')||'<div class="muted">첨부파일 없음</div>'}</div><div class="card section"><h3>검토·승인선</h3>${(r.approvals||[]).map((a,i)=>`<div class="clean-row"><span class="approval-stage"><span class="num">${i+1}</span></span><div><b>${esc(a.approver_name)}</b><div class="muted">${a.team_name||''} · ${a.job_title||a.rank||''}</div></div><span class="pill">${a.status==='APPROVED'?'승인':a.status==='REJECTED'?'반려':a.status==='SKIPPED'?'자동 제외':'대기'}</span></div>`).join('')}</div>${canApprove?`<label>검토 의견</label><textarea id="review_decision_comment" rows="4"></textarea><div class="row" style="justify-content:flex-end"><button class="btn secondary" onclick="decideTaskReview(${id},false)">반려</button><button class="btn" onclick="decideTaskReview(${id},true)">승인</button></div>`:''}`)}
-async function decideTaskReview(id,approve){await api(`/api/tasks/${id}/approve`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor_id:currentUser.id,action:approve?'APPROVE':'REJECT',comment:document.getElementById('review_decision_comment')?.value||''})});closeModal();toast(approve?'승인했습니다.':'반려했습니다.');mywork(window._myWorkScope||'mine')}
+async function decideTaskReview(id,approve){await api(`/api/tasks/${id}/approve`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor_id:currentUser.id,action:approve?'APPROVE':'REJECT',comment:document.getElementById('review_decision_comment')?.value||''})});closeModal();toast(approve?'승인했습니다.':'반려했습니다.');afterTaskAction()}
 
 async function completeTaskFlow(id){
  let tasks=await api('/api/tasks'),t=tasks.find(x=>x.id==id);
@@ -2166,7 +2317,7 @@ async function submitCompleteReport(id){
  let comment=document.getElementById('cr_comment').value.trim();
  let files=[];for(let f of (window._completeFiles||[]))files.push({name:f.name,mime_type:f.type||'application/octet-stream',data_base64:await fileToBase64(f)});
  await api(`/api/tasks/${id}/complete-report`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor_id:currentUser.id,comment,files})});
- window._completeFiles=[];closeModal();toast('완료 보고 후 업무가 완료 처리되었습니다.');refreshCurrentContext();
+ window._completeFiles=[];closeModal();toast('완료 보고 후 업무가 완료 처리되었습니다.');afterTaskAction();
 }
 
 async function saveTaskDetail(id){
