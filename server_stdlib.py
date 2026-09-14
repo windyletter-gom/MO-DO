@@ -1349,13 +1349,24 @@ class App(BaseHTTPRequestHandler):
                     shot=sum(1 for x in clips if (x["video_len"] or "").strip())
                     coded=sum(1 for x in clips if (x["coding_date"] or "").strip())
                     settled=sum(1 for x in clips if (x["settle_status"] or "")=="정산완료")
+                    # 담당교수별 작업량(진행 클립 수 = 촬영된 클립)
+                    by_prof=[dict(r) for r in c.execute("""
+                        SELECT COALESCE(fc.professor,'미지정') professor,
+                               COUNT(cl.id) total,
+                               SUM(CASE WHEN TRIM(COALESCE(cl.video_len,''))<>'' THEN 1 ELSE 0 END) shot,
+                               SUM(CASE WHEN TRIM(COALESCE(cl.coding_date,''))<>'' THEN 1 ELSE 0 END) coded,
+                               SUM(CASE WHEN cl.settle_status='정산완료' THEN 1 ELSE 0 END) settled
+                        FROM filming_courses fc LEFT JOIN filming_clips cl ON cl.course_id=fc.id
+                        GROUP BY COALESCE(fc.professor,'미지정') ORDER BY total DESC""")]
+                    active_list=[dict(r) for r in c.execute("SELECT id,field,name,professor FROM filming_courses WHERE COALESCE(ended,0)=0 ORDER BY id")]
                     return self.send_json({
                         "courses":len(courses),"active":sum(1 for x in courses if not x["ended"]),
                         "ended":sum(1 for x in courses if x["ended"]),
                         "total_clips":total,"shot":shot,"coded":coded,"settled":settled,
                         "shot_rate":round(shot*100/total) if total else 0,
                         "coded_rate":round(coded*100/total) if total else 0,
-                        "settled_rate":round(settled*100/total) if total else 0})
+                        "settled_rate":round(settled*100/total) if total else 0,
+                        "by_professor":by_prof,"active_courses":active_list})
 
                 if p.startswith("/api/filming/courses/") and not p.endswith("/clips"):
                     fid=int(p.split("/")[4])
@@ -1394,9 +1405,17 @@ class App(BaseHTTPRequestHandler):
                     total=c.execute("SELECT COUNT(*) FROM mkt_video_log").fetchone()[0]
                     months=[r[0] for r in c.execute("SELECT DISTINCT month FROM mkt_video_log WHERE month<>'' ORDER BY month")]
                     by_month=[{"month":r[0],"count":r[1]} for r in c.execute("SELECT month,COUNT(*) FROM mkt_video_log WHERE month<>'' GROUP BY month ORDER BY month")]
+                    latest_month=months[-1] if months else None
+                    this_month=c.execute("SELECT COUNT(*) FROM mkt_video_log WHERE month=?",(latest_month,)).fetchone()[0] if latest_month else 0
+                    in_progress=c.execute("SELECT COUNT(*) FROM mkt_video_log WHERE progress IN ('진행중','진행예정')").fetchone()[0]
+                    # 담당자별 작업량: PM / 편집자
+                    def workload(col):
+                        return [{"name":r[0],"count":r[1]} for r in c.execute(f"SELECT {col},COUNT(*) FROM mkt_video_log WHERE TRIM(COALESCE({col},''))<>'' GROUP BY {col} ORDER BY COUNT(*) DESC LIMIT 12")]
                     return self.send_json({"total":total,"months":months,"by_month":by_month,
+                        "latest_month":latest_month,"this_month":this_month,"in_progress":in_progress,
                         "by_major":grp("cat_major"),"by_content_type":grp("content_type"),"by_progress":grp("progress"),
-                        "by_pm":dict(list(grp("pm").items())[:10])})
+                        "by_pm":dict(list(grp("pm").items())[:10]),
+                        "workload_pm":workload("pm"),"workload_editor":workload("editor")})
 
                 # ===== 마케팅 채널 분석(주간) =====
                 if p == "/api/marketing/weekly":
