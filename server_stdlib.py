@@ -1,22 +1,16 @@
 
 from __future__ import annotations
-import json, sqlite3, threading, webbrowser, traceback, sys, subprocess, base64, mimetypes, time, socket, hashlib, os, secrets, shutil
+import json, sqlite3, threading, webbrowser, traceback, sys, subprocess, base64, mimetypes, time, socket, hashlib
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 
 BASE = Path(__file__).resolve().parent
-BUNDLED_DB = BASE / "data" / "moa_work.db"
-DATA_DIR = Path(os.environ.get("MODO_DATA_DIR", str(BASE / "data"))).resolve()
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-DB = DATA_DIR / "moa_work.db"
-UPLOADS = Path(os.environ.get("MODO_UPLOAD_DIR", str(BASE / "uploads"))).resolve()
-UPLOADS.mkdir(parents=True, exist_ok=True)
-# Render 등 PaaS는 PORT 환경변수로 수신 포트를 전달한다.
-HOST = os.environ.get("HOST", "0.0.0.0")
-PORT = int(os.environ.get("PORT", "8000"))
-SESSION_HOURS = int(os.environ.get("MODO_SESSION_HOURS", "12"))
-COOKIE_SECURE = os.environ.get("MODO_COOKIE_SECURE", "1" if os.environ.get("RENDER") else "0") == "1"
+DB = BASE / "data" / "moa_work.db"
+UPLOADS = BASE / "uploads"
+UPLOADS.mkdir(exist_ok=True)
+# 0.0.0.0 로 열어 같은 네트워크의 다른 PC가 브라우저로 접속할 수 있게 한다(1대만 서버로 실행 권장).
+HOST, PORT = "0.0.0.0", 8000
 
 def hash_pw(pw):
     return hashlib.sha256(("modo$salt$"+(pw or "")).encode("utf-8")).hexdigest()
@@ -76,15 +70,6 @@ def safe_join(base: Path, rel: str):
 def ensure_schema():
     with db() as c:
         c.executescript("""
-        CREATE TABLE IF NOT EXISTS web_sessions(
-            token_hash TEXT PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            expires_at TEXT NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_web_sessions_user ON web_sessions(user_id);
-        CREATE INDEX IF NOT EXISTS idx_web_sessions_expires ON web_sessions(expires_at);
         CREATE TABLE IF NOT EXISTS task_comments(
             id INTEGER PRIMARY KEY,
             task_id INTEGER NOT NULL,
@@ -497,6 +482,68 @@ def ensure_schema():
             active INTEGER DEFAULT 1,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+
+        /* ===== 콘텐츠 제작(콘.제작) 강의촬영 스케줄 = TOP EVENT 연동 대상 ===== */
+        CREATE TABLE IF NOT EXISTS filming_courses(
+            id INTEGER PRIMARY KEY,
+            field TEXT,                     -- 과정분야(소방/안전/전기 등)
+            name TEXT NOT NULL,             -- 과정명칭
+            book TEXT,                      -- 교재
+            professor TEXT,                 -- 담당교수
+            course_code TEXT,               -- 강좌코드
+            ended INTEGER DEFAULT 0,        -- 종강 여부(1=종강)
+            hidden INTEGER DEFAULT 0,       -- 숨김(정산 완료 전까지 숨기기 금지)
+            note TEXT,
+            source TEXT DEFAULT 'manual',   -- manual/api (구글시트 API 동기화 대비)
+            sync_status TEXT DEFAULT 'manual',
+            external_key TEXT,              -- 구글시트 행/시트 식별자(향후 API 연동)
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS filming_clips(
+            id INTEGER PRIMARY KEY,
+            course_id INTEGER NOT NULL,
+            clip_no INTEGER,                -- clip 번호
+            subject TEXT,                   -- 과목명
+            shoot_date TEXT,                -- 촬영일자
+            room TEXT,                      -- 촬영실
+            video_len TEXT,                 -- 영상시간(촬영완료 판단)
+            attachment TEXT,                -- 첨부파일(O 등)
+            coding_date TEXT,               -- 코딩일자(코딩완료 판단)
+            settle_status TEXT DEFAULT '미정산', -- 정산완료/미정산
+            note TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        /* ===== 마케팅용 영상 제작 현황 (월별 로그) ===== */
+        CREATE TABLE IF NOT EXISTS mkt_video_log(
+            id INTEGER PRIMARY KEY,
+            month TEXT,                     -- YYYY-MM
+            ym TEXT,                        -- 원본 표기(25년 1월)
+            cat_major TEXT,                 -- 대분류(소방/안전/전기/공통)
+            cat_minor TEXT,                 -- 중분류(과정명)
+            content_type TEXT,              -- 콘텐츠 구분(강의/롱, 홍보/기획쇼츠 등)
+            topic TEXT,                     -- 주제
+            shoot_date TEXT,                -- 촬영일
+            edit_done TEXT,                 -- 편집완료(예정)
+            pm TEXT, instructor TEXT, editor TEXT,
+            progress TEXT,                  -- 진행사항(완료/진행중/취소/진행예정)
+            url TEXT, note TEXT,
+            source TEXT DEFAULT 'manual',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        /* ===== 마케팅 채널 분석(주간) - 정규화 롱테이블 ===== */
+        CREATE TABLE IF NOT EXISTS mkt_weekly_metrics(
+            id INTEGER PRIMARY KEY,
+            week TEXT,                      -- YYYY-MM-DD(매주 금요일 업데이트)
+            category TEXT,                  -- youtube/blog/sns/cafe/search
+            channel TEXT,                   -- 모아소방TV, 네이버블로그, 인스타그램, 모아바 등
+            metric TEXT,                    -- subscribers/views/revenue_usd/visits/followers/members/search_pc ...
+            value REAL,
+            source TEXT DEFAULT 'manual',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
         """)
         c.commit()
 
@@ -531,6 +578,11 @@ def ensure_indexes():
         CREATE INDEX IF NOT EXISTS idx_data_board_rows_board ON data_board_rows(board_id);
         CREATE INDEX IF NOT EXISTS idx_users_team ON users(team_id);
         CREATE INDEX IF NOT EXISTS idx_calendar_events_team ON calendar_events(team_id);
+        CREATE INDEX IF NOT EXISTS idx_filming_clips_course ON filming_clips(course_id);
+        CREATE INDEX IF NOT EXISTS idx_mkt_video_month ON mkt_video_log(month);
+        CREATE INDEX IF NOT EXISTS idx_mkt_video_major ON mkt_video_log(cat_major);
+        CREATE INDEX IF NOT EXISTS idx_mkt_weekly_week ON mkt_weekly_metrics(week);
+        CREATE INDEX IF NOT EXISTS idx_mkt_weekly_cat ON mkt_weekly_metrics(category);
         """)
         # 런타임 추가 컬럼(tasks.reviewer_id/created_by)은 존재할 때만 인덱스 생성
         tcols={r["name"] for r in c.execute("PRAGMA table_info(tasks)")}
@@ -644,68 +696,15 @@ def notify(c, user_id, title, body=""):
     if user_id:
         c.execute("INSERT INTO notifications(user_id,title,body) VALUES(?,?,?)",(user_id,title,body))
 
-def _cookie_token(handler):
-    raw = handler.headers.get("Cookie", "") or ""
-    for part in raw.split(";"):
-        k, sep, v = part.strip().partition("=")
-        if sep and k == "modo_session":
-            return v.strip()
-    return ""
-
-def _session_user(c, handler):
-    token = _cookie_token(handler)
-    if not token:
-        return None
-    th = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    row = c.execute("""SELECT u.*, t.name team_name FROM web_sessions s
-        JOIN users u ON u.id=s.user_id LEFT JOIN teams t ON u.team_id=t.id
-        WHERE s.token_hash=? AND s.expires_at > datetime('now') AND COALESCE(u.active,1)=1""", (th,)).fetchone()
-    return row
-
-def _new_session(c, user_id):
-    token = secrets.token_urlsafe(32)
-    th = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    c.execute("DELETE FROM web_sessions WHERE expires_at <= datetime('now')")
-    c.execute("DELETE FROM web_sessions WHERE user_id=?", (user_id,))
-    c.execute("INSERT INTO web_sessions(token_hash,user_id,expires_at) VALUES(?,?,datetime('now',?))",
-              (th, user_id, f"+{SESSION_HOURS} hours"))
-    c.commit()
-    return token
-
-def _end_session(c, handler):
-    token = _cookie_token(handler)
-    if token:
-        th = hashlib.sha256(token.encode("utf-8")).hexdigest()
-        c.execute("DELETE FROM web_sessions WHERE token_hash=?", (th,))
-        c.commit()
-
-def _session_cookie(token):
-    secure = "; Secure" if COOKIE_SECURE else ""
-    return f"modo_session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_HOURS*3600}{secure}"
-
-def _clear_session_cookie():
-    secure = "; Secure" if COOKIE_SECURE else ""
-    return f"modo_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure}"
-
-def _force_identity_payload(x, uid):
-    # 클라이언트가 다른 사용자 ID를 넣어 권한을 가장하지 못하도록 행위자 필드를 세션 사용자로 덮어쓴다.
-    for k in ("actor_id","viewer_id","user_id","requester_id","sender_id","created_by","uploader_id","author_id"):
-        if k in x:
-            x[k] = uid
-    return x
-
 class App(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         print("[HTTP]", fmt % args, flush=True)
 
-    def send_json(self, obj, status=200, headers=None):
+    def send_json(self, obj, status=200):
         b = jdump(obj)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(b)))
-        for k,v in (headers or {}).items():
-            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(b)
 
@@ -739,25 +738,12 @@ class App(BaseHTTPRequestHandler):
                 ctype = "text/css" if f.suffix==".css" else "application/javascript" if f.suffix==".js" else "image/png" if f.suffix==".png" else "text/html; charset=utf-8"
                 return self.send_file(f, ctype)
             if p.startswith("/uploads/"):
-                with db() as c:
-                    if not _session_user(c, self):
-                        return self.send_json({"error":"로그인이 필요합니다."},401)
-                f = safe_join(UPLOADS, p.split("/uploads/",1)[1])
+                f = safe_join(UPLOADS, unquote(p.split("/uploads/",1)[1]))
                 if not f: return self.send_error(403)
                 ctype = mimetypes.guess_type(str(f))[0] or "application/octet-stream"
                 return self.send_file(f, ctype)
 
             with db() as c:
-                session_user = _session_user(c, self)
-                if not session_user:
-                    return self.send_json({"error":"로그인이 필요합니다."},401)
-                uid = int(session_user["id"])
-                # GET의 권한 판별용 사용자 식별자는 로그인 세션으로 강제한다.
-                for key in ("viewer_id","actor_id","user_id"):
-                    q[key] = [str(uid)]
-                if p == "/api/session":
-                    out=dict(session_user);out.pop("password_hash",None)
-                    return self.send_json({"ok":True,"user":out})
                 if p == "/api/users":
                     rows=c.execute("""SELECT u.*,t.name team_name FROM users u LEFT JOIN teams t ON u.team_id=t.id
                     ORDER BY CASE WHEN u.role='DIVISION_ADMIN' THEN 0 ELSE 1 END,t.sort_order,u.is_team_leader DESC,u.id""").fetchall()
@@ -1334,6 +1320,105 @@ class App(BaseHTTPRequestHandler):
                         "active_ads":active_ads,"due_collab":due_collab,"leads_month":leads_month,
                         "contents":contents,"campaigns":campaigns})
 
+                # ===== 콘텐츠 제작(콘.제작) 강의촬영 스케줄 =====
+                if p == "/api/filming/courses":
+                    rows=c.execute("SELECT * FROM filming_courses ORDER BY ended,id").fetchall()
+                    out=[]
+                    for r in rows:
+                        d=dict(r)
+                        clips=c.execute("SELECT video_len,coding_date,settle_status FROM filming_clips WHERE course_id=?",(r["id"],)).fetchall()
+                        total=len(clips)
+                        shot=sum(1 for x in clips if (x["video_len"] or "").strip())
+                        coded=sum(1 for x in clips if (x["coding_date"] or "").strip())
+                        settled=sum(1 for x in clips if (x["settle_status"] or "")=="정산완료")
+                        d.update(total_clips=total,shot=shot,coded=coded,settled=settled,
+                            shot_rate=round(shot*100/total) if total else 0,
+                            coded_rate=round(coded*100/total) if total else 0,
+                            settled_rate=round(settled*100/total) if total else 0)
+                        out.append(d)
+                    return self.send_json(out)
+
+                if p == "/api/filming/overview":
+                    courses=c.execute("SELECT id,ended FROM filming_courses").fetchall()
+                    clips=c.execute("SELECT video_len,coding_date,settle_status FROM filming_clips").fetchall()
+                    total=len(clips)
+                    shot=sum(1 for x in clips if (x["video_len"] or "").strip())
+                    coded=sum(1 for x in clips if (x["coding_date"] or "").strip())
+                    settled=sum(1 for x in clips if (x["settle_status"] or "")=="정산완료")
+                    return self.send_json({
+                        "courses":len(courses),"active":sum(1 for x in courses if not x["ended"]),
+                        "ended":sum(1 for x in courses if x["ended"]),
+                        "total_clips":total,"shot":shot,"coded":coded,"settled":settled,
+                        "shot_rate":round(shot*100/total) if total else 0,
+                        "coded_rate":round(coded*100/total) if total else 0,
+                        "settled_rate":round(settled*100/total) if total else 0})
+
+                if p.startswith("/api/filming/courses/") and not p.endswith("/clips"):
+                    fid=int(p.split("/")[4])
+                    r=c.execute("SELECT * FROM filming_courses WHERE id=?",(fid,)).fetchone()
+                    if not r: return self.send_json({"error":"not found"},404)
+                    d=dict(r)
+                    clips=[dict(x) for x in c.execute("SELECT * FROM filming_clips WHERE course_id=? ORDER BY clip_no,id",(fid,))]
+                    total=len(clips)
+                    shot=sum(1 for x in clips if (x["video_len"] or "").strip())
+                    coded=sum(1 for x in clips if (x["coding_date"] or "").strip())
+                    settled=sum(1 for x in clips if (x["settle_status"] or "")=="정산완료")
+                    d.update(clips=clips,total_clips=total,shot=shot,coded=coded,settled=settled,
+                        shot_rate=round(shot*100/total) if total else 0,
+                        coded_rate=round(coded*100/total) if total else 0,
+                        settled_rate=round(settled*100/total) if total else 0)
+                    return self.send_json(d)
+
+                # ===== 마케팅 영상 제작 현황 =====
+                if p == "/api/marketing/videos":
+                    where=["1=1"]; args=[]
+                    for key,col in (("month","month"),("major","cat_major"),("content_type","content_type"),("progress","progress"),("pm","pm")):
+                        v=one(q.get(key))
+                        if v: where.append(f"{col}=?"); args.append(v)
+                    kw=one(q.get("q"))
+                    if kw:
+                        where.append("(topic LIKE ? OR cat_minor LIKE ? OR instructor LIKE ? OR editor LIKE ?)")
+                        args+= [f"%{kw}%"]*4
+                    limit=int(one(q.get("limit"),500) or 500)
+                    sql="SELECT * FROM mkt_video_log WHERE "+" AND ".join(where)+" ORDER BY month DESC,id DESC LIMIT ?"
+                    rows=c.execute(sql,args+[limit]).fetchall()
+                    return self.send_json([dict(r) for r in rows])
+
+                if p == "/api/marketing/video-stats":
+                    def grp(col):
+                        return {r[0] or "(미지정)":r[1] for r in c.execute(f"SELECT {col},COUNT(*) FROM mkt_video_log GROUP BY {col} ORDER BY COUNT(*) DESC")}
+                    total=c.execute("SELECT COUNT(*) FROM mkt_video_log").fetchone()[0]
+                    months=[r[0] for r in c.execute("SELECT DISTINCT month FROM mkt_video_log WHERE month<>'' ORDER BY month")]
+                    by_month=[{"month":r[0],"count":r[1]} for r in c.execute("SELECT month,COUNT(*) FROM mkt_video_log WHERE month<>'' GROUP BY month ORDER BY month")]
+                    return self.send_json({"total":total,"months":months,"by_month":by_month,
+                        "by_major":grp("cat_major"),"by_content_type":grp("content_type"),"by_progress":grp("progress"),
+                        "by_pm":dict(list(grp("pm").items())[:10])})
+
+                # ===== 마케팅 채널 분석(주간) =====
+                if p == "/api/marketing/weekly":
+                    cat=one(q.get("category")); ch=one(q.get("channel")); metric=one(q.get("metric"))
+                    where=["1=1"]; args=[]
+                    if cat: where.append("category=?"); args.append(cat)
+                    if ch: where.append("channel=?"); args.append(ch)
+                    if metric: where.append("metric=?"); args.append(metric)
+                    rows=c.execute("SELECT week,category,channel,metric,value FROM mkt_weekly_metrics WHERE "+" AND ".join(where)+" ORDER BY week",args).fetchall()
+                    return self.send_json([dict(r) for r in rows])
+
+                if p == "/api/marketing/weekly-latest":
+                    # 카테고리/채널/지표별 최신 주간 값 + 직전 대비 증감
+                    rows=c.execute("SELECT week,category,channel,metric,value FROM mkt_weekly_metrics ORDER BY week").fetchall()
+                    series={}
+                    for r in rows:
+                        series.setdefault((r["category"],r["channel"],r["metric"]),[]).append((r["week"],r["value"]))
+                    out=[]
+                    for (cat,ch,metric),seq in series.items():
+                        seq.sort()
+                        last=seq[-1]; prev=seq[-2] if len(seq)>1 else None
+                        out.append({"category":cat,"channel":ch,"metric":metric,"week":last[0],"value":last[1],
+                            "delta":(last[1]-prev[1]) if prev else None})
+                    weeks=[r[0] for r in c.execute("SELECT DISTINCT week FROM mkt_weekly_metrics ORDER BY week")]
+                    return self.send_json({"latest":out,"weeks":weeks,"last_week":weeks[-1] if weeks else None})
+
                 if p == "/api/planning/overview":
                     live_active=c.execute("SELECT COUNT(*) FROM planning_live_events WHERE status NOT IN ('완료','취소')").fetchone()[0]
                     promo_active=c.execute("SELECT COUNT(*) FROM planning_promotions WHERE status NOT IN ('완료','취소')").fetchone()[0]
@@ -1835,34 +1920,7 @@ class App(BaseHTTPRequestHandler):
                     if (u["password_hash"] or "")!=hash_pw(pw):
                         return self.send_json({"error":"비밀번호가 올바르지 않습니다."},401)
                     out=dict(u);out.pop("password_hash",None)
-                    token=_new_session(c,u["id"])
-                    return self.send_json({"ok":True,"user":out},headers={"Set-Cookie":_session_cookie(token)})
-
-                if p=="/api/logout":
-                    _end_session(c,self)
-                    return self.send_json({"ok":True},headers={"Set-Cookie":_clear_session_cookie()})
-
-                session_user = _session_user(c, self)
-                if not session_user:
-                    return self.send_json({"error":"로그인이 필요합니다."},401)
-
-                # 비밀번호 초기화는 대상 사용자 ID(target_user_id)를 세션 사용자 ID와 분리해 처리한다.
-                # 최고관리자는 이원행, 정해근 두 사람만 허용한다.
-                if p=="/api/reset-password":
-                    actor_name=(session_user["name"] or "").strip()
-                    if actor_name not in ("이원행","정해근"):
-                        return self.send_json({"error":"최고관리자만 비밀번호를 초기화할 수 있습니다."},403)
-                    uid=int(x.get("target_user_id") or 0)
-                    target=c.execute("SELECT id,name FROM users WHERE id=?",(uid,)).fetchone()
-                    if not target:
-                        return self.send_json({"error":"사용자를 찾을 수 없습니다."},404)
-                    # 공통 임시 비밀번호. 로그인 후 사용자가 직접 변경하도록 안내한다.
-                    temp_password="1234"
-                    c.execute("UPDATE users SET password_hash=? WHERE id=?",(hash_pw(temp_password),uid))
-                    c.commit()
-                    return self.send_json({"ok":True,"target_name":target["name"],"temporary_password":temp_password})
-
-                x = _force_identity_payload(x, int(session_user["id"]))
+                    return self.send_json({"ok":True,"user":out})
 
                 if p=="/api/change-password":
                     uid=int(x.get("user_id") or 0)
@@ -1874,6 +1932,15 @@ class App(BaseHTTPRequestHandler):
                     if len(new_pw)<4:
                         return self.send_json({"error":"새 비밀번호는 4자 이상이어야 합니다."},400)
                     c.execute("UPDATE users SET password_hash=? WHERE id=?",(hash_pw(new_pw),uid));c.commit()
+                    return self.send_json({"ok":True})
+
+                if p=="/api/reset-password":
+                    # 관리자가 특정 계정 비밀번호를 1234로 초기화
+                    actor=c.execute("SELECT * FROM users WHERE id=?",(x.get("actor_id"),)).fetchone()
+                    if not actor or not (actor["role"] in ("SUPER_ADMIN","DIVISION_ADMIN") or actor["name"] in ("정해근","이원행")):
+                        return self.send_json({"error":"관리자만 초기화할 수 있습니다."},403)
+                    uid=int(x.get("user_id") or 0)
+                    c.execute("UPDATE users SET password_hash=? WHERE id=?",(hash_pw('1234'),uid));c.commit()
                     return self.send_json({"ok":True})
 
                 if p=="/api/projects":
@@ -2111,6 +2178,28 @@ class App(BaseHTTPRequestHandler):
                 if p=="/api/marketing/performance":
                     cur=c.execute("""INSERT INTO marketing_performance_snapshots(snapshot_month,data_type,reference_name,value_numeric,value_text,owner_id,notes)
                     VALUES(?,?,?,?,?,?,?)""",(x["snapshot_month"],x["data_type"],x["reference_name"],float(x.get("value_numeric") or 0),x.get("value_text",""),x.get("owner_id"),x.get("notes","")))
+                    c.commit();return self.send_json({"id":cur.lastrowid})
+
+                # ===== 콘.제작 강의촬영: 과정/클립 등록·수정 =====
+                if p=="/api/filming/courses":
+                    cur=c.execute("""INSERT INTO filming_courses(field,name,book,professor,course_code,ended,hidden,note,source,sync_status)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)""",(x.get("field"),x.get("name"),x.get("book"),x.get("professor"),
+                    x.get("course_code"),int(x.get("ended") or 0),int(x.get("hidden") or 0),x.get("note",""),"manual","manual"))
+                    c.commit();return self.send_json({"id":cur.lastrowid})
+
+                if p=="/api/filming/clips":
+                    cur=c.execute("""INSERT INTO filming_clips(course_id,clip_no,subject,shoot_date,room,video_len,attachment,coding_date,settle_status,note)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)""",(x["course_id"],x.get("clip_no"),x.get("subject",""),x.get("shoot_date",""),
+                    x.get("room",""),x.get("video_len",""),x.get("attachment",""),x.get("coding_date",""),x.get("settle_status","미정산"),x.get("note","")))
+                    c.execute("UPDATE filming_courses SET updated_at=CURRENT_TIMESTAMP WHERE id=?",(x["course_id"],))
+                    c.commit();return self.send_json({"id":cur.lastrowid})
+
+                # ===== 마케팅 영상 제작 로그 등록 =====
+                if p=="/api/marketing/videos":
+                    cur=c.execute("""INSERT INTO mkt_video_log(month,ym,cat_major,cat_minor,content_type,topic,shoot_date,edit_done,pm,instructor,editor,progress,url,note,source)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'manual')""",(x.get("month",""),x.get("ym",""),x.get("cat_major",""),
+                    x.get("cat_minor",""),x.get("content_type",""),x.get("topic",""),x.get("shoot_date",""),x.get("edit_done",""),
+                    x.get("pm",""),x.get("instructor",""),x.get("editor",""),x.get("progress","진행예정"),x.get("url",""),x.get("note","")))
                     c.commit();return self.send_json({"id":cur.lastrowid})
 
                 if p=="/api/planning/live-events":
@@ -2365,10 +2454,29 @@ class App(BaseHTTPRequestHandler):
         try:
             p=urlparse(self.path).path;x=self.body()
             with db() as c:
-                session_user = _session_user(c, self)
-                if not session_user:
-                    return self.send_json({"error":"로그인이 필요합니다."},401)
-                x = _force_identity_payload(x, int(session_user["id"]))
+                # 클립 촬영/코딩/정산 상태 갱신
+                if p.startswith("/api/filming/clips/") and p.rsplit("/",1)[1].isdigit():
+                    clip_id=int(p.rsplit("/",1)[1])
+                    fields=[]; args=[]
+                    for k in ("shoot_date","room","video_len","attachment","coding_date","settle_status","subject","note"):
+                        if k in x: fields.append(f"{k}=?"); args.append(x[k])
+                    if not fields: return self.send_json({"error":"변경할 항목이 없습니다."},400)
+                    args.append(clip_id)
+                    c.execute(f"UPDATE filming_clips SET {','.join(fields)} WHERE id=?",args)
+                    c.commit();return self.send_json({"ok":True})
+
+                # 과정 정보/종강/숨김 갱신
+                if p.startswith("/api/filming/courses/") and p.rsplit("/",1)[1].isdigit():
+                    fid=int(p.rsplit("/",1)[1])
+                    fields=[]; args=[]
+                    for k in ("field","name","book","professor","course_code","ended","hidden","note"):
+                        if k in x: fields.append(f"{k}=?"); args.append(x[k])
+                    if not fields: return self.send_json({"error":"변경할 항목이 없습니다."},400)
+                    fields.append("updated_at=CURRENT_TIMESTAMP")
+                    args.append(fid)
+                    c.execute(f"UPDATE filming_courses SET {','.join(fields)} WHERE id=?",args)
+                    c.commit();return self.send_json({"ok":True})
+
                 if p.startswith("/api/requests/") and p.count("/")==3 and p.rsplit("/",1)[1].isdigit():
                     rid=int(p.rsplit("/",1)[1])
                     old=c.execute("SELECT * FROM requests WHERE id=?",(rid,)).fetchone()
@@ -2623,10 +2731,6 @@ class App(BaseHTTPRequestHandler):
             p=urlparse(self.path).path
             x=self.body()
             with db() as c:
-                session_user = _session_user(c, self)
-                if not session_user:
-                    return self.send_json({"error":"로그인이 필요합니다."},401)
-                x = _force_identity_payload(x, int(session_user["id"]))
                 if p.startswith("/api/data-center/") and p.count("/")==3 and p.rsplit("/",1)[1].isdigit():
                     fid=int(p.rsplit("/",1)[1]);old=c.execute("SELECT * FROM data_center_files WHERE id=?",(fid,)).fetchone()
                     if not old:return self.send_json({"error":"not found"},404)
@@ -2717,6 +2821,57 @@ class App(BaseHTTPRequestHandler):
         except Exception as e:
             traceback.print_exc();return self.send_json({"error":str(e)},500)
 
+def seed_new_datasets():
+    """콘.제작 강의촬영 / 마케팅 영상 제작 현황 / 채널 분석(주간) 최초 1회 시드.
+    번들된 data/seed_*.json 을 읽어 신규 테이블을 채운다. 기존 운영 데이터는 건드리지 않는다.
+    각 데이터셋별 app_meta 플래그로 1회만 실행. (구글시트 API 연동 전 '개발 검토용' 데이터)"""
+    def load(name):
+        f=BASE/"data"/name
+        if not f.exists(): return None
+        try: return json.loads(f.read_text(encoding="utf-8"))
+        except Exception as e:
+            print("[SEED] load fail", name, e); return None
+    with db() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS app_meta(key TEXT PRIMARY KEY, value TEXT)")
+        def done(flag): return bool(c.execute("SELECT 1 FROM app_meta WHERE key=?",(flag,)).fetchone())
+        def mark(flag): c.execute("INSERT OR REPLACE INTO app_meta(key,value) VALUES(?, '1')",(flag,))
+
+        # 1) 강의촬영(콘.제작)
+        data=load("seed_filming.json")
+        if data and not done("seed_filming_v1") and c.execute("SELECT COUNT(*) FROM filming_courses").fetchone()[0]==0:
+            for co in data:
+                cur=c.execute("""INSERT INTO filming_courses(field,name,book,professor,course_code,ended,hidden,note,source,sync_status)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                    (co.get("field"),co.get("name"),co.get("book"),co.get("professor"),co.get("course_code"),
+                     int(co.get("ended",0) or 0),0,co.get("note"),co.get("source","sample"),"sample"))
+                cid=cur.lastrowid
+                for cl in co.get("clips",[]):
+                    c.execute("""INSERT INTO filming_clips(course_id,clip_no,subject,shoot_date,room,video_len,attachment,coding_date,settle_status)
+                        VALUES(?,?,?,?,?,?,?,?,?)""",
+                        (cid,cl.get("clip_no"),cl.get("subject"),cl.get("shoot_date"),cl.get("room"),
+                         cl.get("video_len"),cl.get("attachment"),cl.get("coding_date"),cl.get("settle_status","미정산")))
+            mark("seed_filming_v1")
+            print(f"[SEED] filming courses={len(data)}")
+
+        # 2) 마케팅 영상 제작 현황
+        data=load("seed_mkt_video.json")
+        if data and not done("seed_mkt_video_v1") and c.execute("SELECT COUNT(*) FROM mkt_video_log").fetchone()[0]==0:
+            c.executemany("""INSERT INTO mkt_video_log(month,ym,cat_major,cat_minor,content_type,topic,shoot_date,edit_done,pm,instructor,editor,progress,url,note,source)
+                VALUES(:month,:ym,:cat_major,:cat_minor,:content_type,:topic,:shoot_date,:edit_done,:pm,:instructor,:editor,:progress,:url,:note,'sheet')""",
+                [{**{k:r.get(k,'') for k in ('month','ym','cat_major','cat_minor','content_type','topic','shoot_date','edit_done','pm','instructor','editor','progress','url','note')}} for r in data])
+            mark("seed_mkt_video_v1")
+            print(f"[SEED] mkt_video_log rows={len(data)}")
+
+        # 3) 마케팅 채널 분석(주간)
+        data=load("seed_mkt_weekly.json")
+        if data and not done("seed_mkt_weekly_v1") and c.execute("SELECT COUNT(*) FROM mkt_weekly_metrics").fetchone()[0]==0:
+            c.executemany("""INSERT INTO mkt_weekly_metrics(week,category,channel,metric,value,source)
+                VALUES(:week,:category,:channel,:metric,:value,'sheet')""",
+                [{k:r.get(k) for k in ('week','category','channel','metric','value')} for r in data])
+            mark("seed_mkt_weekly_v1")
+            print(f"[SEED] mkt_weekly_metrics rows={len(data)}")
+        c.commit()
+
 def main():
     print("="*56)
     print("모두 (MO DO) v3.0 - Standard Python Edition")
@@ -2724,12 +2879,8 @@ def main():
     print(f"Python: {sys.version.split()[0]}")
     print(f"DB: {DB}")
     if not DB.exists():
-        print("DB not found. Creating persistent database...")
-        if BUNDLED_DB.exists() and BUNDLED_DB.resolve() != DB.resolve():
-            shutil.copy2(BUNDLED_DB, DB)
-            print(f"Bundled DB copied to: {DB}")
-        else:
-            subprocess.check_call([sys.executable, str(BASE/"init_db.py")], cwd=BASE)
+        print("DB not found. Creating...")
+        subprocess.check_call([sys.executable, str(BASE/"init_db.py")], cwd=BASE)
     ensure_schema()
     ensure_user_columns()
     ensure_calendar_columns()
@@ -2741,6 +2892,7 @@ def main():
     ensure_project_columns()
     ensure_task_columns()
     ensure_indexes()
+    seed_new_datasets()
     with db() as c:
         c.execute("UPDATE tasks SET work_type='PROJECT' WHERE work_type IS NULL OR work_type=''")
         c.execute("UPDATE projects SET project_type='APPROVAL_PROJECT' WHERE project_type IS NULL OR project_type=''")
@@ -2835,11 +2987,8 @@ def main():
     print("  나머지 인원은 브라우저에서 위 주소로 접속하세요.")
     print(f"DB 저장 위치: {DB}")
     print("-"*56)
-    if not os.environ.get("RENDER") and os.environ.get("MODO_NO_BROWSER") != "1":
-        threading.Timer(1.0, lambda: webbrowser.open(local_url,new=2)).start()
-        print("브라우저가 자동으로 열립니다. 창을 닫거나 Ctrl+C 로 종료합니다.")
-    else:
-        print("Cloud mode: browser auto-open disabled.")
+    threading.Timer(1.0, lambda: webbrowser.open(local_url,new=2)).start()
+    print("브라우저가 자동으로 열립니다. 창을 닫거나 Ctrl+C 로 종료합니다.")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
