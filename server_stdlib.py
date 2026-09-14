@@ -1,6 +1,6 @@
 
 from __future__ import annotations
-import json, sqlite3, threading, webbrowser, traceback, sys, subprocess, base64, mimetypes, time, socket, hashlib
+import os, json, sqlite3, threading, webbrowser, traceback, sys, subprocess, base64, mimetypes, time, socket, hashlib
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
@@ -10,7 +10,11 @@ DB = BASE / "data" / "moa_work.db"
 UPLOADS = BASE / "uploads"
 UPLOADS.mkdir(exist_ok=True)
 # 0.0.0.0 로 열어 같은 네트워크의 다른 PC가 브라우저로 접속할 수 있게 한다(1대만 서버로 실행 권장).
-HOST, PORT = "0.0.0.0", 8000
+# 클라우드(Render 등)는 PORT 환경변수로 포트를 지정한다 → 있으면 그 값을, 없으면 로컬 기본 8000.
+HOST = "0.0.0.0"
+PORT = int(os.environ.get("PORT") or 8000)
+# 서버 환경(클라우드) 여부: PORT/RENDER 환경변수가 있거나 NO_BROWSER 지정 시 자동 브라우저 열기·정산 안내를 생략한다.
+IS_SERVER = bool(os.environ.get("PORT") or os.environ.get("RENDER") or os.environ.get("NO_BROWSER"))
 
 def hash_pw(pw):
     return hashlib.sha256(("modo$salt$"+(pw or "")).encode("utf-8")).hexdigest()
@@ -2826,11 +2830,14 @@ def seed_new_datasets():
     번들된 data/seed_*.json 을 읽어 신규 테이블을 채운다. 기존 운영 데이터는 건드리지 않는다.
     각 데이터셋별 app_meta 플래그로 1회만 실행. (구글시트 API 연동 전 '개발 검토용' 데이터)"""
     def load(name):
-        f=BASE/"data"/name
-        if not f.exists(): return None
-        try: return json.loads(f.read_text(encoding="utf-8"))
-        except Exception as e:
-            print("[SEED] load fail", name, e); return None
+        # data/ 가 클라우드 영구디스크로 마운트되면 저장소의 seed 파일이 가려질 수 있어
+        # 여러 위치(BASE, BASE/data, BASE/seeds)를 순서대로 탐색한다.
+        for f in (BASE/name, BASE/"data"/name, BASE/"seeds"/name):
+            if f.exists():
+                try: return json.loads(f.read_text(encoding="utf-8"))
+                except Exception as e:
+                    print("[SEED] load fail", f, e); return None
+        print("[SEED] not found:", name); return None
     with db() as c:
         c.execute("CREATE TABLE IF NOT EXISTS app_meta(key TEXT PRIMARY KEY, value TEXT)")
         def done(flag): return bool(c.execute("SELECT 1 FROM app_meta WHERE key=?",(flag,)).fetchone())
@@ -2987,8 +2994,11 @@ def main():
     print("  나머지 인원은 브라우저에서 위 주소로 접속하세요.")
     print(f"DB 저장 위치: {DB}")
     print("-"*56)
-    threading.Timer(1.0, lambda: webbrowser.open(local_url,new=2)).start()
-    print("브라우저가 자동으로 열립니다. 창을 닫거나 Ctrl+C 로 종료합니다.")
+    if not IS_SERVER:
+        threading.Timer(1.0, lambda: webbrowser.open(local_url,new=2)).start()
+        print("브라우저가 자동으로 열립니다. 창을 닫거나 Ctrl+C 로 종료합니다.")
+    else:
+        print(f"[SERVER] 클라우드 모드로 기동합니다. PORT={PORT}")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
