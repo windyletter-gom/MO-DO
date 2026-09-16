@@ -613,6 +613,9 @@ def ensure_user_columns():
             c.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
         # 비밀번호 미설정 계정은 기본 비밀번호 '1234'로 일원화
         c.execute("UPDATE users SET password_hash=? WHERE password_hash IS NULL OR password_hash=''",(hash_pw('1234'),))
+        # 아이디(login_id) 미설정 계정은 이메일 @ 앞부분으로 자동 채움 (이메일/아이디 로그인 지원)
+        c.execute("""UPDATE users SET login_id=LOWER(SUBSTR(email,1,INSTR(email,'@')-1))
+                     WHERE (login_id IS NULL OR login_id='') AND email LIKE '%@%'""")
         c.commit()
 
 def ensure_planning_columns():
@@ -1932,14 +1935,19 @@ class App(BaseHTTPRequestHandler):
             x=self.body()
             with db() as c:
                 if p=="/api/login":
-                    email=(x.get("email") or "").strip().lower()
+                    # 이메일 전체 또는 아이디(이메일 @ 앞부분)로 로그인 가능
+                    ident=(x.get("email") or "").strip().lower()
                     pw=x.get("password") or ""
-                    if not email or not pw:
-                        return self.send_json({"error":"이메일과 비밀번호를 입력해주세요."},400)
+                    if not ident or not pw:
+                        return self.send_json({"error":"이메일(또는 아이디)과 비밀번호를 입력해주세요."},400)
+                    # 아이디만 입력한 경우 @moaeg.com 붙인 이메일도 후보로 대조
+                    ident_email=ident if "@" in ident else (ident+"@moaeg.com")
                     u=c.execute("""SELECT u.*,t.name team_name FROM users u LEFT JOIN teams t ON u.team_id=t.id
-                        WHERE (LOWER(u.email)=? OR LOWER(COALESCE(u.login_id,''))=?) AND COALESCE(u.active,1)=1""",(email,email)).fetchone()
+                        WHERE (LOWER(u.email)=? OR LOWER(u.email)=? OR LOWER(COALESCE(u.login_id,''))=?
+                               OR LOWER(SUBSTR(u.email,1,INSTR(u.email,'@')-1))=?) AND COALESCE(u.active,1)=1""",
+                        (ident,ident_email,ident,ident)).fetchone()
                     if not u:
-                        return self.send_json({"error":"등록되지 않은 이메일이거나 비활성 계정입니다."},401)
+                        return self.send_json({"error":"등록되지 않은 이메일/아이디이거나 비활성 계정입니다."},401)
                     if (u["password_hash"] or "")!=hash_pw(pw):
                         return self.send_json({"error":"비밀번호가 올바르지 않습니다."},401)
                     out=dict(u);out.pop("password_hash",None)
@@ -2336,10 +2344,14 @@ class App(BaseHTTPRequestHandler):
                     actor=c.execute("SELECT * FROM users WHERE id=?",(x.get("actor_id"),)).fetchone()
                     if not actor or not (actor["role"]=="SUPER_ADMIN" or actor["name"] in ("정해근","이원행")):
                         return self.send_json({"error":"관리자 권한이 없습니다."},403)
-                    cur=c.execute("""INSERT INTO users(team_id,name,rank,job_title,extension,email,role,is_team_leader,active,login_id,phone,account_status)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",(x.get("team_id"),x["name"],x.get("rank",""),x.get("job_title",""),x.get("extension",""),x.get("email",""),
-                        x.get("role","MEMBER"),1 if x.get("is_team_leader") else 0,1,x.get("login_id",""),x.get("phone",""),"ACTIVE"))
-                    c.commit();return self.send_json({"id":cur.lastrowid})
+                    # 신규 사용자는 최초 비밀번호를 1234로 설정(로그인 후 개인설정에서 변경).
+                    # login_id 미입력 시 이메일 @ 앞부분을 아이디로 자동 지정한다.
+                    email_v=(x.get("email") or "").strip()
+                    login_v=(x.get("login_id") or "").strip() or (email_v.split("@")[0].lower() if "@" in email_v else "")
+                    cur=c.execute("""INSERT INTO users(team_id,name,rank,job_title,extension,email,role,is_team_leader,active,login_id,phone,account_status,password_hash)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",(x.get("team_id"),x["name"],x.get("rank",""),x.get("job_title",""),x.get("extension",""),email_v,
+                        x.get("role","MEMBER"),1 if x.get("is_team_leader") else 0,1,login_v,x.get("phone",""),"ACTIVE",hash_pw("1234")))
+                    c.commit();return self.send_json({"id":cur.lastrowid,"login_id":login_v})
 
                 if p=="/api/admin/teams":
                     actor=c.execute("SELECT * FROM users WHERE id=?",(x.get("actor_id"),)).fetchone()
