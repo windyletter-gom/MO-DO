@@ -349,14 +349,14 @@ input,select,textarea{width:100%;padding:9px;border:1px solid var(--line);border
   <div class="login-panel">
     <div class="login-card">
       <h2>로그인</h2>
-      <div class="sub">직원 이메일과 비밀번호로 로그인하세요.</div>
-      <label>이메일</label>
-      <input id="login_email" type="email" placeholder="name@moaeg.com" onkeydown="if(event.key==='Enter')doLogin()">
+      <div class="sub">이메일 또는 아이디와 비밀번호로 로그인하세요.</div>
+      <label>이메일 또는 아이디</label>
+      <input id="login_email" type="text" placeholder="name@moaeg.com 또는 name" onkeydown="if(event.key==='Enter')doLogin()">
       <label>비밀번호</label>
       <input id="login_pw" type="password" placeholder="비밀번호" onkeydown="if(event.key==='Enter')doLogin()">
       <button class="login-btn" onclick="doLogin()">로그인</button>
       <div id="login_err" class="login-err"></div>
-      <div class="login-hint">최초 비밀번호는 <b>1234</b>입니다. 로그인 후 우측 상단 <b>개인 설정</b>에서 변경하세요.</div>
+      <div class="login-hint">아이디는 이메일 <b>@moaeg.com</b> 앞부분입니다(예: name@moaeg.com → <b>name</b>). 최초 비밀번호는 <b>1234</b>이며, 로그인 후 우측 상단 <b>개인 설정</b>에서 변경하세요.</div>
     </div>
   </div>
 </div>
@@ -417,7 +417,7 @@ async function doLogin(){
  let email=(document.getElementById('login_email').value||'').trim();
  let pw=document.getElementById('login_pw').value||'';
  let err=document.getElementById('login_err');err.textContent='';
- if(!email||!pw){err.textContent='이메일과 비밀번호를 입력해주세요.';return}
+ if(!email||!pw){err.textContent='이메일(또는 아이디)과 비밀번호를 입력해주세요.';return}
  let r;
  try{r=await api('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password:pw})})}
  catch(e){err.textContent=parseApiError(e,'로그인에 실패했습니다.');return}
@@ -1442,9 +1442,14 @@ function adminOrgUsers(data){
  body.innerHTML=`<div class="card"><div class="row" style="justify-content:space-between"><div><h3>조직 및 계정 관리</h3><div class="muted">조직도 변경은 업무·프로젝트의 팀·부서 선택 항목에도 반영됩니다.</div></div><div class="row"><button class="btn secondary" onclick="adminTeamModal()">조직도 수정</button><button class="btn" onclick="adminUserCreateModal()">+ 조직원 아이디 개설</button></div></div></div>
  <div class="admin-org-grid section">${data.teams.filter(t=>t.active!==0).map(t=>`<div class="admin-org-card"><div class="row"><span class="admin-org-icon">${t.name.slice(0,1)}</span><div><b>${esc(t.name)}</b><div class="muted">${t.active_count}명 · 퇴사 ${t.retired_count}명</div></div></div><div class="admin-team-members">${data.users.filter(u=>u.team_id===t.id&&u.active!==0).slice(0,8).map(u=>`<span class="pill">${esc(u.name)}</span>`).join('')||'<span class="muted">구성원 없음</span>'}</div></div>`).join('')}</div>
  <div class="card section"><div class="row" style="justify-content:space-between"><div><div class="page-kicker">USER ACCOUNTS</div><h3>조직원 및 로그인 아이디</h3></div><div class="row"><button class="btn secondary" onclick="toggleAdminRetired()">${window.adminShowRetired?'재직자만':'퇴사자 포함'}</button><button class="btn" onclick="adminUserCreateModal()">+ 아이디 개설</button></div></div>
- <table><thead><tr><th>이름·아이디</th><th>소속</th><th>직책·직급</th><th>전화번호·내선</th><th>이메일</th><th>계정 상태</th><th>권한 적용</th></tr></thead><tbody>${data.users.filter(u=>window.adminShowRetired||u.active!==0).map(u=>`<tr style="${u.active===0?'opacity:.55':''}"><td><b>${esc(u.name)}</b><div class="muted">${esc(u.login_id||'미설정')}</div></td><td>${u.team_name||'콘텐츠사업부 총괄'}</td><td>${u.job_title||'-'}<div class="muted">${u.rank||'-'}</div></td><td>${u.phone||'-'}<div class="muted">내선 ${u.extension||'-'}</div></td><td>${u.email||'-'}</td><td><span class="pill">${u.active===0?'퇴사':u.account_status==='LOCKED'?'잠금':u.account_status==='LEAVE'?'휴직':'사용 중'}</span></td><td><button class="btn secondary" onclick="adminUserEditModal(${u.id})">개별 권한 설정</button></td></tr>`).join('')}</tbody></table></div>`;
+ <table><thead><tr><th>이름·아이디</th><th>소속</th><th>직책·직급</th><th>전화번호·내선</th><th>이메일</th><th>계정 상태</th><th>권한 적용</th></tr></thead><tbody>${data.users.filter(u=>window.adminShowRetired||u.active!==0).map(u=>`<tr style="${u.active===0?'opacity:.55':''}"><td><b>${esc(u.name)}</b><div class="muted">${esc(u.login_id||'미설정')}</div></td><td>${u.team_name||'콘텐츠사업부 총괄'}</td><td>${u.job_title||'-'}<div class="muted">${u.rank||'-'}</div></td><td>${u.phone||'-'}<div class="muted">내선 ${u.extension||'-'}</div></td><td>${u.email||'-'}</td><td><span class="pill">${u.active===0?'퇴사':u.account_status==='LOCKED'?'잠금':u.account_status==='LEAVE'?'휴직':'사용 중'}</span></td><td><div class="row" style="gap:6px"><button class="btn secondary" onclick="adminUserEditModal(${u.id})">개별 권한 설정</button><button class="btn secondary" style="color:#c0392b;border-color:#e6b8b2" onclick="resetUserPassword(${u.id},'${esc(u.name)}')">비밀번호 초기화</button></div></td></tr>`).join('')}</tbody></table></div>`;
 }
 function toggleAdminRetired(){window.adminShowRetired=!window.adminShowRetired;adminCenter('ORG')}
+async function resetUserPassword(uid,name){
+ if(!confirm(`${name} 님의 비밀번호를 최초 비밀번호(1234)로 초기화할까요?`))return;
+ try{ await api('/api/reset-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor_id:currentUser.id,user_id:uid})}); toast(`${name} 님의 비밀번호를 1234로 초기화했습니다.`); }
+ catch(e){ toast('초기화 실패: '+e.message); }
+}
 function adminTeamModal(){
  showModal('조직도 수정',`<div class="muted">팀 이름과 사용 여부를 관리합니다. 비활성화해도 기존 업무 이력은 유지됩니다.</div>${(_adminData.teams||[]).map(t=>`<div class="row card" style="justify-content:space-between"><div><b>${esc(t.name)}</b><div class="muted">재직 ${t.active_count}명</div></div><button class="btn secondary" onclick="adminEditTeam(${t.id})">수정</button></div>`).join('')}<button class="btn" onclick="adminAddTeam()">+ 팀 추가</button>`);
 }
@@ -1455,7 +1460,7 @@ async function adminEditTeam(id){
 }
 async function adminAddTeam(){let name=prompt('추가할 팀명을 입력하세요.');if(!name)return;await api('/api/admin/teams',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor_id:currentUser.id,name})});closeModal();adminCenter('ORG')}
 function adminUserCreateModal(){
- showModal('조직원 아이디 개설',`<label>이름</label><input id="au_name"><div class="two"><div><label>로그인 아이디</label><input id="au_login"></div><div><label>소속팀</label><select id="au_team">${teams.filter(t=>t.active).map(t=>`<option value="${t.id}">${t.name}</option>`)}</select></div></div><div class="two"><div><label>직급</label><input id="au_rank"></div><div><label>직책</label><input id="au_job"></div></div><div class="two"><div><label>휴대전화</label><input id="au_phone"></div><div><label>내선</label><input id="au_ext"></div></div><label>이메일</label><input id="au_email"><label>권한</label><select id="au_role"><option value="MEMBER">일반 사용자</option><option value="TEAM_LEADER">팀장</option><option value="DIVISION_ADMIN">부서 관리자</option><option value="SUPER_ADMIN">시스템 관리자</option></select><button class="btn" onclick="saveAdminUser()">계정 생성</button>`);
+ showModal('조직원 아이디 개설',`<label>이름</label><input id="au_name"><div class="two"><div><label>로그인 아이디</label><input id="au_login"></div><div><label>소속팀</label><select id="au_team">${teams.filter(t=>t.active).map(t=>`<option value="${t.id}">${t.name}</option>`)}</select></div></div><div class="two"><div><label>직급</label><input id="au_rank"></div><div><label>직책</label><input id="au_job"></div></div><div class="two"><div><label>휴대전화</label><input id="au_phone"></div><div><label>내선</label><input id="au_ext"></div></div><label>이메일</label><input id="au_email"><label>권한</label><select id="au_role"><option value="MEMBER">일반 사용자</option><option value="TEAM_LEADER">팀장</option><option value="DIVISION_ADMIN">부서 관리자</option><option value="SUPER_ADMIN">시스템 관리자</option></select><div class="muted" style="margin:8px 0">· 로그인 아이디를 비워두면 이메일 <b>@moaeg.com</b> 앞부분으로 자동 지정됩니다.<br>· 최초 비밀번호는 <b>1234</b>로 생성되며, 본인이 개인 설정에서 변경합니다.</div><button class="btn" onclick="saveAdminUser()">계정 생성</button>`);
 }
 async function saveAdminUser(){await api('/api/admin/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor_id:currentUser.id,name:au_name.value,login_id:au_login.value,team_id:+au_team.value,rank:au_rank.value,job_title:au_job.value,phone:au_phone.value,extension:au_ext.value,email:au_email.value,role:au_role.value,is_team_leader:au_role.value==='TEAM_LEADER'})});[users,teams]=await Promise.all([api('/api/users'),api('/api/teams')]);closeModal();adminCenter('ORG')}
 function adminUserEditModal(uid){
