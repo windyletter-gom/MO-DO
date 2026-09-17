@@ -1,6 +1,6 @@
 
 from __future__ import annotations
-import os, json, sqlite3, threading, webbrowser, traceback, sys, subprocess, base64, mimetypes, time, socket, hashlib
+import os, re, json, sqlite3, threading, webbrowser, traceback, sys, subprocess, base64, mimetypes, time, socket, hashlib
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
@@ -537,6 +537,33 @@ def ensure_schema():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
 
+        /* ===== 주간 업무보고 (개인이 주차별로 등록, 팀별 조회) ===== */
+        CREATE TABLE IF NOT EXISTS weekly_reports(
+            id INTEGER PRIMARY KEY,
+            week_start TEXT NOT NULL,       -- 해당 주 월요일 'YYYY-MM-DD'
+            week_end TEXT NOT NULL,         -- 해당 주 일요일
+            team_id INTEGER,
+            user_id INTEGER,               -- 담당자
+            title TEXT,                     -- 업무명
+            detail TEXT,                    -- 업무내용
+            complete_date TEXT,             -- 완료일정(달력)
+            status TEXT DEFAULT '미완료',   -- 완료/미완료/진행중
+            target_rate INTEGER,            -- 목표 달성률(%)
+            actual_rate INTEGER,            -- 실제 달성률(%)
+            deliverable TEXT,               -- 최종 산출물(설명)
+            deliverable_file TEXT,          -- 저장 파일명
+            deliverable_original TEXT,      -- 원본 파일명
+            deliverable_mime TEXT,
+            collaborators TEXT,             -- 협업 인원 표시용 텍스트
+            collaborator_ids TEXT,          -- JSON [user_id]
+            carried_from INTEGER,           -- 이월 원본 항목 id
+            carried_over INTEGER DEFAULT 0, -- 차주로 이월됨(1)
+            sort_order INTEGER DEFAULT 0,
+            created_by INTEGER,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
         /* ===== 마케팅 채널 분석(주간) - 정규화 롱테이블 ===== */
         CREATE TABLE IF NOT EXISTS mkt_weekly_metrics(
             id INTEGER PRIMARY KEY,
@@ -587,6 +614,8 @@ def ensure_indexes():
         CREATE INDEX IF NOT EXISTS idx_mkt_video_major ON mkt_video_log(cat_major);
         CREATE INDEX IF NOT EXISTS idx_mkt_weekly_week ON mkt_weekly_metrics(week);
         CREATE INDEX IF NOT EXISTS idx_mkt_weekly_cat ON mkt_weekly_metrics(category);
+        CREATE INDEX IF NOT EXISTS idx_weekly_reports_wk ON weekly_reports(week_start,team_id);
+        CREATE INDEX IF NOT EXISTS idx_weekly_reports_user ON weekly_reports(user_id);
         """)
         # 런타임 추가 컬럼(tasks.reviewer_id/created_by)은 존재할 때만 인덱스 생성
         tcols={r["name"] for r in c.execute("PRAGMA table_info(tasks)")}
@@ -1445,6 +1474,26 @@ class App(BaseHTTPRequestHandler):
                     weeks=[r[0] for r in c.execute("SELECT DISTINCT week FROM mkt_weekly_metrics ORDER BY week")]
                     return self.send_json({"latest":out,"weeks":weeks,"last_week":weeks[-1] if weeks else None})
 
+                # ===== 주간 업무보고 =====
+                if p == "/api/weekly":
+                    team_id=int(one(q.get("team_id"),0) or 0)
+                    week_start=one(q.get("week_start"),"")
+                    where=["wr.week_start=?"]; args=[week_start]
+                    if team_id: where.append("wr.team_id=?"); args.append(team_id)
+                    rows=[dict(r) for r in c.execute(f"""SELECT wr.*, u.name user_name, u.rank user_rank, t.name team_name
+                        FROM weekly_reports wr LEFT JOIN users u ON wr.user_id=u.id LEFT JOIN teams t ON wr.team_id=t.id
+                        WHERE {' AND '.join(where)} ORDER BY wr.user_id, wr.sort_order, wr.id""",args)]
+                    for r in rows:
+                        try: r["collaborator_ids"]=json.loads(r.get("collaborator_ids") or "[]")
+                        except: r["collaborator_ids"]=[]
+                    members=[]
+                    if team_id:
+                        members=[dict(x) for x in c.execute("""SELECT id,name,rank,job_title FROM users
+                            WHERE team_id=? AND COALESCE(active,1)=1 ORDER BY is_team_leader DESC,id""",(team_id,))]
+                    team=c.execute("SELECT id,name FROM teams WHERE id=?",(team_id,)).fetchone() if team_id else None
+                    return self.send_json({"week_start":week_start,"week_end":one(q.get("week_end"),""),
+                        "team":dict(team) if team else None,"members":members,"items":rows})
+
                 if p == "/api/planning/overview":
                     live_active=c.execute("SELECT COUNT(*) FROM planning_live_events WHERE status NOT IN ('완료','취소')").fetchone()[0]
                     promo_active=c.execute("SELECT COUNT(*) FROM planning_promotions WHERE status NOT IN ('완료','취소')").fetchone()[0]
@@ -2233,6 +2282,52 @@ class App(BaseHTTPRequestHandler):
                     x.get("pm",""),x.get("instructor",""),x.get("editor",""),x.get("progress","진행예정"),x.get("url",""),x.get("note","")))
                     c.commit();return self.send_json({"id":cur.lastrowid})
 
+                # ===== 주간 업무보고: 등록 / 이월 =====
+                if p=="/api/weekly":
+                    def save_deliv(item_id,b64,orig,mime):
+                        if not b64: return None,None,None
+                        raw=base64.b64decode(b64)
+                        wdir=UPLOADS/"weekly"/str(item_id); wdir.mkdir(parents=True,exist_ok=True)
+                        safe=re.sub(r'[^\w.\-]','_',orig or 'file')
+                        stored=f"{int(time.time())}_{safe}"
+                        (wdir/stored).write_bytes(raw)
+                        return stored,orig,(mime or "application/octet-stream")
+                    collabs=x.get("collaborator_ids") or []
+                    cur=c.execute("""INSERT INTO weekly_reports(week_start,week_end,team_id,user_id,title,detail,complete_date,status,
+                        target_rate,actual_rate,deliverable,collaborators,collaborator_ids,sort_order,created_by)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (x["week_start"],x.get("week_end",""),x.get("team_id"),x.get("user_id"),x.get("title",""),x.get("detail",""),
+                         x.get("complete_date"),x.get("status","미완료"),
+                         (int(x["target_rate"]) if str(x.get("target_rate","")).strip()!="" else None),
+                         (int(x["actual_rate"]) if str(x.get("actual_rate","")).strip()!="" else None),
+                         x.get("deliverable",""),x.get("collaborators",""),json.dumps(collabs,ensure_ascii=False),
+                         int(x.get("sort_order") or 0),x.get("created_by")))
+                    wid=cur.lastrowid
+                    if x.get("deliverable_base64"):
+                        stored,orig,mime=save_deliv(wid,x.get("deliverable_base64"),x.get("deliverable_name"),x.get("deliverable_mime"))
+                        c.execute("UPDATE weekly_reports SET deliverable_file=?,deliverable_original=?,deliverable_mime=? WHERE id=?",(stored,orig,mime,wid))
+                    c.commit();return self.send_json({"id":wid})
+
+                if p.startswith("/api/weekly/") and p.endswith("/carry"):
+                    src_id=int(p.split("/")[3])
+                    src=c.execute("SELECT * FROM weekly_reports WHERE id=?",(src_id,)).fetchone()
+                    if not src: return self.send_json({"error":"원본을 찾을 수 없습니다."},404)
+                    from datetime import datetime,timedelta
+                    ws=datetime.strptime(src["week_start"],"%Y-%m-%d")+timedelta(days=7)
+                    we=datetime.strptime(src["week_end"],"%Y-%m-%d")+timedelta(days=7) if src["week_end"] else ws+timedelta(days=6)
+                    # 이미 이월된 항목 중복 방지
+                    dup=c.execute("SELECT id FROM weekly_reports WHERE carried_from=?",(src_id,)).fetchone()
+                    if dup:
+                        return self.send_json({"error":"이미 차주로 이월된 업무입니다.","id":dup["id"]},409)
+                    cur=c.execute("""INSERT INTO weekly_reports(week_start,week_end,team_id,user_id,title,detail,complete_date,status,
+                        target_rate,actual_rate,deliverable,collaborators,collaborator_ids,carried_from,created_by)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (ws.strftime("%Y-%m-%d"),we.strftime("%Y-%m-%d"),src["team_id"],src["user_id"],src["title"],src["detail"],
+                         None,"미완료",src["target_rate"],None,src["deliverable"],src["collaborators"],src["collaborator_ids"],
+                         src_id,x.get("actor_id")))
+                    c.execute("UPDATE weekly_reports SET carried_over=1 WHERE id=?",(src_id,))
+                    c.commit();return self.send_json({"id":cur.lastrowid,"ok":True})
+
                 if p=="/api/planning/live-events":
                     cur=c.execute("""INSERT INTO planning_live_events(event_name,event_type,product_name,owner_id,event_date,registration_count,confirmed_count,paid_conversion_count,satisfaction_score,review_score,status,notes)
                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",(x["event_name"],x.get("event_type","라이브특강"),x.get("product_name",""),x.get("owner_id"),
@@ -2512,6 +2607,35 @@ class App(BaseHTTPRequestHandler):
                     c.execute(f"UPDATE filming_courses SET {','.join(fields)} WHERE id=?",args)
                     c.commit();return self.send_json({"ok":True})
 
+                # 주간 업무보고 항목 수정
+                if p.startswith("/api/weekly/") and p.rsplit("/",1)[1].isdigit():
+                    wid=int(p.rsplit("/",1)[1])
+                    item=c.execute("SELECT * FROM weekly_reports WHERE id=?",(wid,)).fetchone()
+                    if not item: return self.send_json({"error":"항목을 찾을 수 없습니다."},404)
+                    actor=c.execute("SELECT * FROM users WHERE id=?",(x.get("actor_id"),)).fetchone()
+                    is_admin=actor and (actor["role"] in ("SUPER_ADMIN","DIVISION_ADMIN") or actor["is_team_leader"] or actor["name"] in ("정해근","이원행"))
+                    if not (actor and (actor["id"]==item["user_id"] or is_admin)):
+                        return self.send_json({"error":"본인 또는 팀장/관리자만 수정할 수 있습니다."},403)
+                    fields=[]; args=[]
+                    for k in ("title","detail","complete_date","status","deliverable","collaborators"):
+                        if k in x: fields.append(f"{k}=?"); args.append(x[k])
+                    for k in ("target_rate","actual_rate"):
+                        if k in x:
+                            v=x[k]; fields.append(f"{k}=?"); args.append(int(v) if str(v).strip()!="" else None)
+                    if "collaborator_ids" in x:
+                        fields.append("collaborator_ids=?"); args.append(json.dumps(x["collaborator_ids"] or [],ensure_ascii=False))
+                    if x.get("deliverable_base64"):
+                        raw=base64.b64decode(x["deliverable_base64"])
+                        wdir=UPLOADS/"weekly"/str(wid); wdir.mkdir(parents=True,exist_ok=True)
+                        safe=re.sub(r'[^\w.\-]','_',x.get("deliverable_name") or 'file')
+                        stored=f"{int(time.time())}_{safe}"; (wdir/stored).write_bytes(raw)
+                        fields+=["deliverable_file=?","deliverable_original=?","deliverable_mime=?"]
+                        args+=[stored,x.get("deliverable_name"),x.get("deliverable_mime") or "application/octet-stream"]
+                    if not fields: return self.send_json({"error":"변경할 항목이 없습니다."},400)
+                    fields.append("updated_at=CURRENT_TIMESTAMP"); args.append(wid)
+                    c.execute(f"UPDATE weekly_reports SET {','.join(fields)} WHERE id=?",args)
+                    c.commit();return self.send_json({"ok":True})
+
                 if p.startswith("/api/requests/") and p.count("/")==3 and p.rsplit("/",1)[1].isdigit():
                     rid=int(p.rsplit("/",1)[1])
                     old=c.execute("SELECT * FROM requests WHERE id=?",(rid,)).fetchone()
@@ -2766,6 +2890,18 @@ class App(BaseHTTPRequestHandler):
             p=urlparse(self.path).path
             x=self.body()
             with db() as c:
+                if p.startswith("/api/weekly/") and p.rsplit("/",1)[1].isdigit():
+                    wid=int(p.rsplit("/",1)[1])
+                    item=c.execute("SELECT * FROM weekly_reports WHERE id=?",(wid,)).fetchone()
+                    if not item: return self.send_json({"error":"not found"},404)
+                    actor=c.execute("SELECT * FROM users WHERE id=?",(x.get("actor_id"),)).fetchone()
+                    is_admin=actor and (actor["role"] in ("SUPER_ADMIN","DIVISION_ADMIN") or actor["is_team_leader"] or actor["name"] in ("정해근","이원행"))
+                    if not (actor and (actor["id"]==item["user_id"] or is_admin)):
+                        return self.send_json({"error":"본인 또는 팀장/관리자만 삭제할 수 있습니다."},403)
+                    c.execute("UPDATE weekly_reports SET carried_over=0 WHERE carried_from=?",(wid,))
+                    c.execute("DELETE FROM weekly_reports WHERE id=?",(wid,))
+                    c.commit();return self.send_json({"ok":True})
+
                 if p.startswith("/api/data-center/") and p.count("/")==3 and p.rsplit("/",1)[1].isdigit():
                     fid=int(p.rsplit("/",1)[1]);old=c.execute("SELECT * FROM data_center_files WHERE id=?",(fid,)).fetchone()
                     if not old:return self.send_json({"error":"not found"},404)
