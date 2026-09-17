@@ -364,6 +364,7 @@ input,select,textarea{width:100%;padding:9px;border:1px solid var(--line);border
 <aside class="side"><div class="logo"><span class="logo-mark"><img src="/static/assets/moa_logo.png" alt="모아교육그룹 로고"></span><div class="brand-wrap"><div class="brand-title">모두</div><div class="brand-version">MO DO</div></div></div>
 <div class="nav">
 <button data-view="home" class="active"><span>🏠 홈</span><span id="homeBadge" class="nav-badge"></span></button>
+<button data-view="weekly"><span>🗓️ 주간 업무보고</span></button>
 <button data-view="mywork"><span>✅ 업무관리</span><span id="workBadge" class="nav-badge"></span></button>
 <button data-view="projects"><span>📦 프로젝트</span><span id="projectBadge" class="nav-badge"></span></button>
 <button data-view="calendar"><span>📅 캘린더</span><span id="calendarBadge" class="nav-badge"></span></button>
@@ -493,8 +494,8 @@ async function reopenWorkspaceSection(tid,code){
 
 async function render(){
  hello.textContent=`${currentUser.name} ${currentUser.rank||''} · ${currentUser.team_name||'콘텐츠사업부'} · 내선 ${currentUser.extension||'-'} · ${currentUser.email||''}`;
- pageTitle.textContent={home:'홈',mywork:'업무관리',projects:'프로젝트',calendar:'캘린더',teams:'팀 워크스페이스',notices:'공지 게시판',notifications:'알림',search:'검색',directory:'구성원',admin:'관리자'}[currentView];
- if(currentView==='home')return home(); if(currentView==='mywork')return mywork(); if(currentView==='projects')return projectList(); if(currentView==='calendar')return calendarView(); if(currentView==='teams')return teamView(); if(currentView==='notices')return noticesBoard(); if(currentView==='notifications')return notificationsView(); if(currentView==='search')return searchView(); if(currentView==='directory')return directory(); if(currentView==='admin')return adminCenter();
+ pageTitle.textContent={home:'홈',weekly:'주간 업무보고',mywork:'업무관리',projects:'프로젝트',calendar:'캘린더',teams:'팀 워크스페이스',notices:'공지 게시판',notifications:'알림',search:'검색',directory:'구성원',admin:'관리자'}[currentView];
+ if(currentView==='home')return home(); if(currentView==='weekly')return weeklyReport(); if(currentView==='mywork')return mywork(); if(currentView==='projects')return projectList(); if(currentView==='calendar')return calendarView(); if(currentView==='teams')return teamView(); if(currentView==='notices')return noticesBoard(); if(currentView==='notifications')return notificationsView(); if(currentView==='search')return searchView(); if(currentView==='directory')return directory(); if(currentView==='admin')return adminCenter();
 }
 async function home(){
  const [d,inc,out,tasks,blockedPriority,urgentPriority,projectsNow,myReviewTasks,inDirectives,outDirectives,notices]=await Promise.all([
@@ -1664,6 +1665,120 @@ async function saveCollab(){await api('/api/marketing/collab',{method:'POST',hea
 async function marketingResults(tid){let rows=await api('/api/marketing/performance');document.getElementById('wsBody').innerHTML=`<div class="row" style="justify-content:space-between"><div><h3>성과 데이터</h3><div class="muted">월별 실제 운영 결과를 기록합니다. 이후 평가 모듈의 원천 데이터로 활용합니다.</div></div><button class="btn" onclick="resultModal()">+ 성과 데이터</button></div><table class="section"><thead><tr><th>월</th><th>데이터유형</th><th>대상</th><th>수치</th><th>텍스트</th><th>담당</th><th>메모</th></tr></thead><tbody>${rows.map(x=>`<tr><td>${x.snapshot_month}</td><td>${x.data_type}</td><td><b>${esc(x.reference_name)}</b></td><td>${x.value_numeric}</td><td>${esc(x.value_text||'')}</td><td>${x.owner_name||''}</td><td>${esc(x.notes||'')}</td></tr>`).join('')}</tbody></table>`}
 function resultModal(){showModal('성과 데이터 등록',`<label>월</label><input id="rs_month" type="month"><label>데이터 유형</label><input id="rs_type" placeholder="조회수, 방문자, 클릭, 전환, 리드 등"><label>대상</label><input id="rs_ref"><label>수치</label><input id="rs_num" type="number"><label>텍스트 값</label><input id="rs_text"><label>담당자</label><select id="rs_owner">${users.filter(u=>u.active!==0&&u.team_id==2).map(u=>`<option value="${u.id}">${u.name}</option>`)}</select><label>메모</label><textarea id="rs_note"></textarea><button class="btn" onclick="saveResult()">저장</button>`)}
 async function saveResult(){await api('/api/marketing/performance',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({snapshot_month:rs_month.value,data_type:rs_type.value,reference_name:rs_ref.value,value_numeric:+rs_num.value||0,value_text:rs_text.value,owner_id:+rs_owner.value,notes:rs_note.value})});closeModal();marketingResults(2)}
+
+/* ===================== 주간 업무보고 ===================== */
+function wkMondayOf(d){let x=new Date(d);let g=x.getDay();let diff=(g===0?-6:1-g);x.setDate(x.getDate()+diff);x.setHours(0,0,0,0);return x}
+function wkFmt(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
+function wkMD(d){return `${d.getMonth()+1}/${d.getDate()}`}
+function wkCanEdit(uid,teamId){return uid===currentUser.id || isSuperAdmin() || (currentUser.is_team_leader && teamId===currentUser.team_id)}
+function wkStatusPill(s){let col={'완료':'#22a06b','진행중':'#e08e0b','미완료':'#c0392b'}[s]||'#98a4b3';return `<span class="pill" style="background:${col}22;color:${col}">${s||'미완료'}</span>`}
+async function weeklyReport(){
+ if(!window._wkMonday){let t=new Date();let m=wkMondayOf(t);let g=t.getDay();if(g===5||g===6||g===0)m.setDate(m.getDate()+7);window._wkMonday=m}
+ if(!window._wkTeamId)window._wkTeamId=currentUser.team_id||(teams.find(t=>t.active)||{}).id||1;
+ let mon=new Date(window._wkMonday),sun=new Date(mon);sun.setDate(mon.getDate()+6);
+ let ws=wkFmt(mon),we=wkFmt(sun),tid=window._wkTeamId;
+ let data=await api(`/api/weekly?team_id=${tid}&week_start=${ws}&week_end=${we}`);
+ window._wkData=data;
+ let teamName=(teams.find(t=>t.id===tid)||{}).name||'';
+ let itemsByUser={};(data.items||[]).forEach(it=>{(itemsByUser[it.user_id]=itemsByUser[it.user_id]||[]).push(it)});
+ let rowsHtml=(data.members||[]).map(m=>{
+   let its=itemsByUser[m.id]||[];
+   let can=wkCanEdit(m.id,tid);
+   let addBtn=can?`<button class="btn secondary" style="padding:2px 8px" onclick="wkItemModal(${m.id})">+ 업무 추가</button>`:'';
+   if(its.length===0){
+     return `<tr><td><b>${esc(m.name)}</b><div class="muted" style="font-size:11px">${m.rank||''}</div></td><td colspan="7" class="muted">등록된 업무가 없습니다. ${addBtn}</td></tr>`;
+   }
+   return its.map((it,i)=>{
+     let rate=`목표 ${it.target_rate==null?'-':it.target_rate+'%'} · 실제 ${it.actual_rate==null?'-':it.actual_rate+'%'}`;
+     let deliv=(it.deliverable_file?`<a href="/uploads/weekly/${it.id}/${encodeURIComponent(it.deliverable_file)}" target="_blank">📎 ${esc(it.deliverable_original||'파일')}</a><br>`:'')+esc(it.deliverable||'');
+     let actions=can?`<div class="row" style="gap:4px;flex-wrap:wrap"><button class="btn secondary" style="padding:2px 6px" onclick="wkItemModal(${m.id},${it.id})">수정</button>${it.carried_over?'<span class="pill">이월됨</span>':`<button class="btn secondary" style="padding:2px 6px" onclick="wkCarry(${it.id})">차주 이월</button>`}<button class="btn secondary" style="padding:2px 6px;color:#c0392b;border-color:#e6b8b2" onclick="wkDelete(${it.id})">삭제</button></div>`:'';
+     return `<tr>${i===0?`<td rowspan="${its.length}" style="vertical-align:top"><b>${esc(m.name)}</b><div class="muted" style="font-size:11px">${m.rank||''}</div>${can?`<div style="margin-top:6px">${addBtn}</div>`:''}</td>`:''}
+       <td><b>${esc(it.title||'')}</b>${it.carried_from?' <span class="pill" style="background:#eef;color:#66c">이월</span>':''}</td>
+       <td style="max-width:220px">${esc(it.detail||'')}</td>
+       <td>${it.complete_date?it.complete_date:'-'}<div>${wkStatusPill(it.status)}</div></td>
+       <td>${rate}</td>
+       <td style="max-width:180px">${deliv||'-'}</td>
+       <td style="max-width:150px">${esc(it.collaborators||'없음')}</td>
+       <td>${actions}</td></tr>`;
+   }).join('');
+ }).join('');
+ view.innerHTML=`
+ <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+   <div class="row" style="gap:6px"><button class="btn secondary" onclick="wkNav(-1)">◀ 이전주</button><button class="btn secondary" onclick="wkToday()">이번주</button><button class="btn secondary" onclick="wkNav(1)">다음주 ▶</button></div>
+   <div class="row" style="gap:6px;flex-wrap:wrap">${teams.filter(t=>t.active).map(t=>`<button class="btn ${t.id===tid?'':'secondary'}" style="padding:4px 10px" onclick="wkSelectTeam(${t.id})">${t.name}</button>`).join('')}</div>
+ </div>
+ <div class="card section" style="border-top:4px solid #6b5cff">
+   <h2 style="margin:2px 0">Weekly Report(콘텐츠 사업부 ${esc(teamName)})_${wkMD(mon)}~${wkMD(sun)}</h2>
+   <div class="muted" style="white-space:pre-line;margin-top:8px;padding:10px;background:#f6f7fb;border-radius:8px">▶ 주간 진행 업무는 최소 3EA 이상 작성
+▶ 완료 된 업무는 반드시 완료 여부를 표시
+▶ 금주 내 완료 업무는 완료 일정을 명시 / 장기간 진행 업무일 경우 금주 목표 달성률을 명시</div>
+ </div>
+ <div class="card section" style="overflow-x:auto">
+   <table style="min-width:960px"><thead><tr><th>담당자</th><th>업무명</th><th>업무내용</th><th>완료일정·상태</th><th>달성률(목표/실제)</th><th>최종 산출물</th><th>협업 인원(팀)</th><th>관리</th></tr></thead>
+   <tbody>${rowsHtml||'<tr><td colspan="8" class="muted">이 팀의 팀원이 없습니다.</td></tr>'}</tbody></table>
+ </div>`;
+}
+function wkNav(delta){window._wkMonday.setDate(window._wkMonday.getDate()+delta*7);window._wkMonday=new Date(window._wkMonday);weeklyReport()}
+function wkToday(){let t=new Date();window._wkMonday=wkMondayOf(t);weeklyReport()}
+function wkSelectTeam(tid){window._wkTeamId=tid;weeklyReport()}
+function wkItemModal(uid,itemId){
+ let it=itemId?(window._wkData.items||[]).find(x=>x.id===itemId):null;
+ window._wkCollabSel=new Set((it&&it.collaborator_ids)||[]);
+ let member=(window._wkData.members||[]).find(m=>m.id===uid);
+ showModal((itemId?'주간 업무 수정':'주간 업무 등록')+` · ${esc(member?member.name:'')}`,`
+  <label>업무명</label><input id="wk_title" value="${esc(it?it.title:'')}">
+  <label>업무내용</label><textarea id="wk_detail" rows="3">${esc(it?it.detail:'')}</textarea>
+  <div class="two"><div><label>완료일정(달력)</label><input id="wk_cdate" type="date" value="${it&&it.complete_date?it.complete_date:''}"></div><div><label>처리 상태</label><select id="wk_status"><option ${it&&it.status==='미완료'?'selected':''}>미완료</option><option ${it&&it.status==='진행중'?'selected':''}>진행중</option><option ${it&&it.status==='완료'?'selected':''}>완료</option></select></div></div>
+  <div class="two"><div><label>목표 달성률(%)</label><input id="wk_target" type="number" min="0" max="100" value="${it&&it.target_rate!=null?it.target_rate:''}"></div><div><label>실제 달성률(%)</label><input id="wk_actual" type="number" min="0" max="100" value="${it&&it.actual_rate!=null?it.actual_rate:''}"></div></div>
+  <label>최종 산출물(설명)</label><input id="wk_deliv" value="${esc(it?it.deliverable:'')}">
+  <label>산출물 파일 ${it&&it.deliverable_file?`<span class="muted">(현재: ${esc(it.deliverable_original||'파일')})</span>`:''}</label><input id="wk_file" type="file">
+  <label>협업 인원(팀)</label><div class="row" style="gap:8px"><button class="btn secondary" type="button" onclick="wkOpenCollab()">+ 협업 인원 선택</button><span id="wk_collab_txt" class="muted">${esc(it?it.collaborators||'없음':'없음')}</span></div>
+  <div class="row" style="justify-content:flex-end;margin-top:14px;gap:6px"><button class="btn secondary" onclick="closeModal()">취소</button><button class="btn" onclick="saveWkItem(${uid},${itemId||'null'})">저장</button></div>`);
+}
+function wkCollabNames(){let sel=(users||[]).filter(u=>window._wkCollabSel&&window._wkCollabSel.has(u.id));return sel.map(u=>`${u.name}${u.team_name?'('+u.team_name+')':''}`).join(', ')}
+function wkOpenCollab(){
+ let old=document.getElementById('wkCollabPop');if(old)old.remove();
+ let pop=document.createElement('div');pop.id='wkCollabPop';
+ pop.style='position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:9999;display:flex;align-items:center;justify-content:center';
+ let byTeam=teams.filter(t=>t.active).map(t=>{
+   let ms=(users||[]).filter(u=>u.active!==0&&u.team_id===t.id);
+   if(!ms.length)return '';
+   return `<div style="margin-bottom:10px"><b>${esc(t.name)}</b><div class="checkbox-grid" style="grid-template-columns:repeat(3,1fr);margin-top:6px">${ms.map(u=>`<label class="check-card"><input type="checkbox" class="wk_collab_cb" value="${u.id}" ${window._wkCollabSel.has(u.id)?'checked':''}> ${esc(u.name)} <span class="muted">${u.rank||''}</span></label>`).join('')}</div></div>`;
+ }).join('');
+ pop.innerHTML=`<div style="background:#fff;border-radius:14px;padding:18px;max-width:760px;width:92%;max-height:82vh;overflow:auto"><div class="row" style="justify-content:space-between"><h3>협업 인원 선택</h3><button class="btn secondary" onclick="document.getElementById('wkCollabPop').remove()">닫기</button></div><div class="muted" style="margin:6px 0">팀별 구성원을 선택하세요.</div>${byTeam}<div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" onclick="wkConfirmCollab()">선택 완료</button></div></div>`;
+ document.body.appendChild(pop);
+}
+function wkConfirmCollab(){
+ window._wkCollabSel=new Set([...document.querySelectorAll('.wk_collab_cb:checked')].map(c=>+c.value));
+ document.getElementById('wk_collab_txt').textContent=wkCollabNames()||'없음';
+ let p=document.getElementById('wkCollabPop');if(p)p.remove();
+}
+async function saveWkItem(uid,itemId){
+ let mon=new Date(window._wkMonday),sun=new Date(mon);sun.setDate(mon.getDate()+6);
+ let title=document.getElementById('wk_title').value.trim();
+ if(!title){toast('업무명을 입력하세요.');return}
+ let payload={actor_id:currentUser.id,week_start:wkFmt(mon),week_end:wkFmt(sun),team_id:window._wkTeamId,user_id:uid,
+   title,detail:wk_detail.value,complete_date:wk_cdate.value||null,status:wk_status.value,
+   target_rate:wk_target.value,actual_rate:wk_actual.value,deliverable:wk_deliv.value,
+   collaborator_ids:[...window._wkCollabSel],collaborators:wkCollabNames(),created_by:currentUser.id};
+ let f=document.getElementById('wk_file').files[0];
+ if(f){payload.deliverable_base64=await fileToBase64(f);payload.deliverable_name=f.name;payload.deliverable_mime=f.type||'application/octet-stream'}
+ try{
+   if(itemId)await api('/api/weekly/'+itemId,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+   else await api('/api/weekly',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+   closeModal();toast('저장했습니다.');weeklyReport();
+ }catch(e){toast('저장 실패: '+e.message)}
+}
+async function wkCarry(id){
+ if(!confirm('이 업무를 차주로 이월할까요? 차주 보고서에 미완료 상태로 복사됩니다.'))return;
+ try{await api('/api/weekly/'+id+'/carry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor_id:currentUser.id})});toast('차주로 이월했습니다.');weeklyReport()}
+ catch(e){toast(e.message.includes('이미')?'이미 차주로 이월된 업무입니다.':'이월 실패: '+e.message)}
+}
+async function wkDelete(id){
+ if(!confirm('이 업무를 삭제할까요?'))return;
+ try{await api('/api/weekly/'+id,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor_id:currentUser.id})});toast('삭제했습니다.');weeklyReport()}
+ catch(e){toast('삭제 실패: '+e.message)}
+}
 
 /* ===== 팀 오버뷰에 제작 작업량(콘.제작 / 마케팅 영상) 요약 반영 ===== */
 async function renderProductionSummary(tid,body){
