@@ -52,7 +52,89 @@ def _crud_target(p):
     key = p[len("/api/"):p.rfind("/")]
     return GENERIC_CRUD.get(key), (int(last) if GENERIC_CRUD.get(key) else None)
 
+# ===== 데이터베이스 엔진 =====
+# 기본: 로컬 SQLite(단일 PC/개발). 환경변수 TURSO_DATABASE_URL(+TURSO_AUTH_TOKEN)이
+# 있으면 libSQL(Turso) 원격 DB에 '임베디드 리플리카'로 연결해 데이터를 영구 보존한다.
+# (클라우드 무료 플랜은 파일시스템이 초기화되므로 원격 DB가 필요하다.)
+# MODO_FORCE_LIBSQL=1 은 로컬 파일을 libSQL 드라이버로 여는 검증용 모드.
+TURSO_URL   = (os.environ.get("TURSO_DATABASE_URL") or "").strip()
+TURSO_TOKEN = (os.environ.get("TURSO_AUTH_TOKEN") or "").strip()
+USE_LIBSQL  = bool(TURSO_URL) or os.environ.get("MODO_FORCE_LIBSQL")=="1"
+REPLICA     = str(BASE/"data"/"turso_replica.db")   # 원격과 동기화되는 로컬 캐시(재부팅 시 재동기화)
+_libsql = None
+if USE_LIBSQL:
+    try:
+        import libsql_experimental as _libsql
+    except Exception as _e:
+        print(f"[DB] libSQL 드라이버 로드 실패 → 로컬 SQLite로 대체 실행합니다: {_e}")
+        USE_LIBSQL=False; TURSO_URL=""
+
+class _Row:
+    """libSQL이 돌려주는 튜플을 sqlite3.Row 처럼 이름/인덱스로 접근 가능하게 감싼다."""
+    __slots__=("_c","_v","_m")
+    def __init__(self,cols,vals):
+        self._c=cols; self._v=list(vals); self._m={c:i for i,c in enumerate(cols)}
+    def __getitem__(self,k):
+        if isinstance(k,(int,slice)): return self._v[k]
+        return self._v[self._m[k]]
+    def keys(self): return list(self._c)
+    def __iter__(self): return iter(self._v)
+    def __len__(self): return len(self._v)
+    def get(self,k,d=None):
+        i=self._m.get(k); return self._v[i] if i is not None else d
+
+class _Cur:
+    def __init__(self,raw):
+        self._raw=raw
+        d=getattr(raw,"description",None)
+        self._cols=[x[0] for x in d] if d else []
+    @property
+    def lastrowid(self): return self._raw.lastrowid
+    @property
+    def rowcount(self): return getattr(self._raw,"rowcount",-1)
+    def _w(self,t): return _Row(self._cols,t) if t is not None else None
+    def fetchone(self): return self._w(self._raw.fetchone())
+    def fetchall(self): return [self._w(t) for t in self._raw.fetchall()]
+    def __iter__(self): return iter(self.fetchall())
+
+class _Conn:
+    """sqlite3 연결과 동일한 최소 인터페이스(execute/executemany/executescript/commit/close/컨텍스트매니저)."""
+    def __init__(self,con): self._con=con
+    def execute(self,sql,params=()):
+        if isinstance(params,list): params=tuple(params)   # libSQL은 튜플만 허용(sqlite3는 list도 허용)
+        cur=self._con.cursor(); cur.execute(sql,params); return _Cur(cur)
+    def executemany(self,sql,seq):
+        seq=[tuple(r) if isinstance(r,list) else r for r in seq]
+        cur=self._con.cursor(); cur.executemany(sql,seq); return _Cur(cur)
+    def executescript(self,script):
+        cur=self._con.cursor(); cur.executescript(script); return _Cur(cur)
+    def commit(self):
+        self._con.commit()
+        if TURSO_URL:
+            try: self._con.sync()   # 쓰기 후 원격과 동기화(내구성 보장)
+            except Exception: pass
+    def rollback(self):
+        try: self._con.rollback()
+        except Exception: pass
+    def close(self):
+        try: self._con.close()
+        except Exception: pass
+    def __enter__(self): return self
+    def __exit__(self,et,ev,tb):
+        if et is None: self.commit()
+        else: self.rollback()
+        return False
+
+def _libsql_connect():
+    if TURSO_URL:
+        con=_libsql.connect(REPLICA, sync_url=TURSO_URL, auth_token=TURSO_TOKEN)
+    else:
+        con=_libsql.connect(str(DB))
+    return _Conn(con)
+
 def db():
+    if USE_LIBSQL:
+        return _libsql_connect()
     c = sqlite3.connect(DB, timeout=30)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA foreign_keys=ON")
@@ -3030,9 +3112,10 @@ def seed_new_datasets():
         # 2) 마케팅 영상 제작 현황
         data=load("seed_mkt_video.json")
         if data and not done("seed_mkt_video_v1") and c.execute("SELECT COUNT(*) FROM mkt_video_log").fetchone()[0]==0:
+            _vk=('month','ym','cat_major','cat_minor','content_type','topic','shoot_date','edit_done','pm','instructor','editor','progress','url','note')
             c.executemany("""INSERT INTO mkt_video_log(month,ym,cat_major,cat_minor,content_type,topic,shoot_date,edit_done,pm,instructor,editor,progress,url,note,source)
-                VALUES(:month,:ym,:cat_major,:cat_minor,:content_type,:topic,:shoot_date,:edit_done,:pm,:instructor,:editor,:progress,:url,:note,'sheet')""",
-                [{**{k:r.get(k,'') for k in ('month','ym','cat_major','cat_minor','content_type','topic','shoot_date','edit_done','pm','instructor','editor','progress','url','note')}} for r in data])
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'sheet')""",
+                [tuple(r.get(k,'') for k in _vk) for r in data])
             mark("seed_mkt_video_v1")
             print(f"[SEED] mkt_video_log rows={len(data)}")
 
@@ -3040,19 +3123,54 @@ def seed_new_datasets():
         data=load("seed_mkt_weekly.json")
         if data and not done("seed_mkt_weekly_v1") and c.execute("SELECT COUNT(*) FROM mkt_weekly_metrics").fetchone()[0]==0:
             c.executemany("""INSERT INTO mkt_weekly_metrics(week,category,channel,metric,value,source)
-                VALUES(:week,:category,:channel,:metric,:value,'sheet')""",
-                [{k:r.get(k) for k in ('week','category','channel','metric','value')} for r in data])
+                VALUES(?,?,?,?,?,'sheet')""",
+                [(r.get('week'),r.get('category'),r.get('channel'),r.get('metric'),r.get('value')) for r in data])
             mark("seed_mkt_weekly_v1")
             print(f"[SEED] mkt_weekly_metrics rows={len(data)}")
         c.commit()
+
+def bootstrap_libsql_base():
+    """Turso(libSQL) 원격 DB가 비어 있으면 init_db.py로 기본 조직(팀/계정/모듈 등)을
+    임시 SQLite에 생성한 뒤 원격 DB로 스키마+데이터를 통째로 이식한다. 최초 1회만."""
+    if not USE_LIBSQL: return
+    try:
+        with db() as c:
+            n=c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        if n and n>0: return   # 이미 기본 조직 있음
+    except Exception:
+        pass  # users 테이블이 없을 수 있음 → 부트스트랩 진행
+    import tempfile
+    tmp=tempfile.mktemp(suffix=".db")
+    env=dict(os.environ); env["MODO_INIT_DB"]=tmp; env.pop("MODO_FORCE_LIBSQL",None); env.pop("TURSO_DATABASE_URL",None)
+    subprocess.check_call([sys.executable, str(BASE/"init_db.py")], cwd=BASE, env=env)
+    src=sqlite3.connect(tmp); src.row_factory=sqlite3.Row
+    tabs=[r["name"] for r in src.execute("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+    schema={r["name"]:r["sql"] for r in src.execute("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+    with db() as c:
+        for t in tabs:
+            try: c.execute(schema[t])           # init_db 테이블을 원격에 생성(이미 있으면 무시)
+            except Exception: pass
+            rows=src.execute(f'SELECT * FROM "{t}"').fetchall()
+            if not rows: continue
+            cols=[d[0] for d in src.execute(f'SELECT * FROM "{t}" LIMIT 1').description]
+            collist=",".join(f'"{x}"' for x in cols); ph=",".join("?"*len(cols))
+            c.executemany(f'INSERT INTO "{t}" ({collist}) VALUES ({ph})',[tuple(r) for r in rows])
+        c.commit()
+    src.close()
+    try: os.unlink(tmp)
+    except Exception: pass
+    print("[BOOTSTRAP] libSQL 원격 DB에 기본 조직 이식 완료")
 
 def main():
     print("="*56)
     print("모두 (MO DO) v3.0 - Standard Python Edition")
     print("="*56)
     print(f"Python: {sys.version.split()[0]}")
-    print(f"DB: {DB}")
-    if not DB.exists():
+    print(f"DB: {'libSQL/Turso(원격)' if TURSO_URL else DB}")
+    if USE_LIBSQL:
+        if TURSO_URL: print("[DB] Turso 원격 DB 사용 — 데이터 영구 보존")
+        bootstrap_libsql_base()
+    elif not DB.exists():
         print("DB not found. Creating...")
         subprocess.check_call([sys.executable, str(BASE/"init_db.py")], cwd=BASE)
     ensure_schema()

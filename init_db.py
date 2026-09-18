@@ -1,8 +1,10 @@
 
-import sqlite3
+import os, sqlite3
 from pathlib import Path
 BASE=Path(__file__).resolve().parent
-DB=BASE/"data"/"moa_work.db"
+# MODO_INIT_DB 로 출력 경로를 바꿀 수 있다(Turso 부트스트랩용 임시 파일 생성).
+DB=Path(os.environ.get("MODO_INIT_DB") or (BASE/"data"/"moa_work.db"))
+DB.parent.mkdir(parents=True, exist_ok=True)
 if DB.exists(): DB.unlink()
 c=sqlite3.connect(DB)
 c.execute("PRAGMA foreign_keys=ON")
