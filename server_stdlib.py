@@ -6,9 +6,12 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
 
 BASE = Path(__file__).resolve().parent
-DB = BASE / "data" / "moa_work.db"
-UPLOADS = BASE / "uploads"
-UPLOADS.mkdir(exist_ok=True)
+# MODO_DB_PATH: 영구 디스크(예: Render Disk /var/data/moa_work.db)를 붙일 때 DB 파일 위치.
+# 없으면 기본 위치(로컬/개발용). 이 값을 주면 그 경로에 DB가 저장돼 재시작해도 유지된다.
+DB = Path(os.environ.get("MODO_DB_PATH") or (BASE / "data" / "moa_work.db"))
+DB.parent.mkdir(parents=True, exist_ok=True)
+UPLOADS = Path(os.environ.get("MODO_UPLOADS_PATH") or (BASE / "uploads"))
+UPLOADS.mkdir(parents=True, exist_ok=True)
 # 0.0.0.0 로 열어 같은 네트워크의 다른 PC가 브라우저로 접속할 수 있게 한다(1대만 서버로 실행 권장).
 # 클라우드(Render 등)는 PORT 환경변수로 포트를 지정한다 → 있으면 그 값을, 없으면 로컬 기본 8000.
 HOST = "0.0.0.0"
@@ -107,12 +110,15 @@ class _Conn:
         seq=[tuple(r) if isinstance(r,list) else r for r in seq]
         cur=self._con.cursor(); cur.executemany(sql,seq); return _Cur(cur)
     def executescript(self,script):
-        cur=self._con.cursor(); cur.executescript(script); return _Cur(cur)
+        # 원격(Hrana)은 여러 문장을 한 번에 실행하지 못할 수 있어 개별 문장으로 나눠 실행한다.
+        s=re.sub(r'/\*.*?\*/','',script,flags=re.S)   # /* */ 주석 제거
+        cur=self._con.cursor()
+        for st in s.split(';'):
+            st=st.strip()
+            if st: cur.execute(st)
+        return _Cur(cur)
     def commit(self):
         self._con.commit()
-        if TURSO_URL:
-            try: self._con.sync()   # 쓰기 후 원격과 동기화(내구성 보장)
-            except Exception: pass
     def rollback(self):
         try: self._con.rollback()
         except Exception: pass
@@ -127,7 +133,9 @@ class _Conn:
 
 def _libsql_connect():
     if TURSO_URL:
-        con=_libsql.connect(REPLICA, sync_url=TURSO_URL, auth_token=TURSO_TOKEN)
+        # 원격 Turso에 '직접' 연결한다(로컬 캐시/동기화 없음). 모든 읽기·쓰기가 곧바로 원격을
+        # 대상으로 하므로 서버가 재시작돼도 항상 최신 데이터를 읽는다.
+        con=_libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
     else:
         con=_libsql.connect(str(DB))
     return _Conn(con)
@@ -3092,9 +3100,9 @@ def seed_new_datasets():
         def done(flag): return bool(c.execute("SELECT 1 FROM app_meta WHERE key=?",(flag,)).fetchone())
         def mark(flag): c.execute("INSERT OR REPLACE INTO app_meta(key,value) VALUES(?, '1')",(flag,))
 
-        # 1) 강의촬영(콘.제작)
+        # 1) 강의촬영(콘.제작) — 데이터가 없을 때만 시드(원격에 이미 있으면 건드리지 않음)
         data=load("seed_filming.json")
-        if data and not done("seed_filming_v1") and c.execute("SELECT COUNT(*) FROM filming_courses").fetchone()[0]==0:
+        if data and not done("seed_filming_v2") and c.execute("SELECT COUNT(*) FROM filming_courses").fetchone()[0]==0:
             for co in data:
                 cur=c.execute("""INSERT INTO filming_courses(field,name,book,professor,course_code,ended,hidden,note,source,sync_status)
                     VALUES(?,?,?,?,?,?,?,?,?,?)""",
@@ -3106,26 +3114,26 @@ def seed_new_datasets():
                         VALUES(?,?,?,?,?,?,?,?,?)""",
                         (cid,cl.get("clip_no"),cl.get("subject"),cl.get("shoot_date"),cl.get("room"),
                          cl.get("video_len"),cl.get("attachment"),cl.get("coding_date"),cl.get("settle_status","미정산")))
-            mark("seed_filming_v1")
+            mark("seed_filming_v2")
             print(f"[SEED] filming courses={len(data)}")
 
-        # 2) 마케팅 영상 제작 현황
+        # 2) 마케팅 영상 제작 현황 — 데이터가 없을 때만 시드
         data=load("seed_mkt_video.json")
-        if data and not done("seed_mkt_video_v1") and c.execute("SELECT COUNT(*) FROM mkt_video_log").fetchone()[0]==0:
+        if data and not done("seed_mkt_video_v2") and c.execute("SELECT COUNT(*) FROM mkt_video_log").fetchone()[0]==0:
             _vk=('month','ym','cat_major','cat_minor','content_type','topic','shoot_date','edit_done','pm','instructor','editor','progress','url','note')
             c.executemany("""INSERT INTO mkt_video_log(month,ym,cat_major,cat_minor,content_type,topic,shoot_date,edit_done,pm,instructor,editor,progress,url,note,source)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'sheet')""",
                 [tuple(r.get(k,'') for k in _vk) for r in data])
-            mark("seed_mkt_video_v1")
+            mark("seed_mkt_video_v2")
             print(f"[SEED] mkt_video_log rows={len(data)}")
 
-        # 3) 마케팅 채널 분석(주간)
+        # 3) 마케팅 채널 분석(주간) — 데이터가 없을 때만 시드
         data=load("seed_mkt_weekly.json")
-        if data and not done("seed_mkt_weekly_v1") and c.execute("SELECT COUNT(*) FROM mkt_weekly_metrics").fetchone()[0]==0:
+        if data and not done("seed_mkt_weekly_v2") and c.execute("SELECT COUNT(*) FROM mkt_weekly_metrics").fetchone()[0]==0:
             c.executemany("""INSERT INTO mkt_weekly_metrics(week,category,channel,metric,value,source)
                 VALUES(?,?,?,?,?,'sheet')""",
                 [(r.get('week'),r.get('category'),r.get('channel'),r.get('metric'),r.get('value')) for r in data])
-            mark("seed_mkt_weekly_v1")
+            mark("seed_mkt_weekly_v2")
             print(f"[SEED] mkt_weekly_metrics rows={len(data)}")
         c.commit()
 
@@ -3168,7 +3176,8 @@ def main():
     print(f"Python: {sys.version.split()[0]}")
     print(f"DB: {'libSQL/Turso(원격)' if TURSO_URL else DB}")
     if USE_LIBSQL:
-        if TURSO_URL: print("[DB] Turso 원격 DB 사용 — 데이터 영구 보존")
+        if TURSO_URL:
+            print("[DB] Turso 원격 DB에 직접 연결 — 데이터 영구 보존")
         bootstrap_libsql_base()
     elif not DB.exists():
         print("DB not found. Creating...")
