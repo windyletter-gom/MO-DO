@@ -3117,22 +3117,28 @@ def seed_new_datasets():
             mark("seed_filming_v2")
             print(f"[SEED] filming courses={len(data)}")
 
-        # 2) 마케팅 영상 제작 현황 — 데이터가 없을 때만 시드
+        # 2) 마케팅 영상 제작 현황 — 데이터가 없을 때만 시드 (원격 대비 다중행 나눠 삽입)
         data=load("seed_mkt_video.json")
         if data and not done("seed_mkt_video_v2") and c.execute("SELECT COUNT(*) FROM mkt_video_log").fetchone()[0]==0:
             _vk=('month','ym','cat_major','cat_minor','content_type','topic','shoot_date','edit_done','pm','instructor','editor','progress','url','note')
-            c.executemany("""INSERT INTO mkt_video_log(month,ym,cat_major,cat_minor,content_type,topic,shoot_date,edit_done,pm,instructor,editor,progress,url,note,source)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'sheet')""",
-                [tuple(r.get(k,'') for k in _vk) for r in data])
+            rows=[tuple(r.get(k,'') for k in _vk) for r in data]
+            for i in range(0,len(rows),300):
+                part=rows[i:i+300]
+                vals=",".join(["(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'sheet')"]*len(part))
+                flat=[v for row in part for v in row]
+                c.execute("INSERT INTO mkt_video_log(month,ym,cat_major,cat_minor,content_type,topic,shoot_date,edit_done,pm,instructor,editor,progress,url,note,source) VALUES "+vals, flat)
             mark("seed_mkt_video_v2")
             print(f"[SEED] mkt_video_log rows={len(data)}")
 
-        # 3) 마케팅 채널 분석(주간) — 데이터가 없을 때만 시드
+        # 3) 마케팅 채널 분석(주간) — 데이터가 없을 때만 시드 (원격 대비 다중행 나눠 삽입)
         data=load("seed_mkt_weekly.json")
         if data and not done("seed_mkt_weekly_v2") and c.execute("SELECT COUNT(*) FROM mkt_weekly_metrics").fetchone()[0]==0:
-            c.executemany("""INSERT INTO mkt_weekly_metrics(week,category,channel,metric,value,source)
-                VALUES(?,?,?,?,?,'sheet')""",
-                [(r.get('week'),r.get('category'),r.get('channel'),r.get('metric'),r.get('value')) for r in data])
+            rows=[(r.get('week'),r.get('category'),r.get('channel'),r.get('metric'),r.get('value')) for r in data]
+            for i in range(0,len(rows),400):
+                part=rows[i:i+400]
+                vals=",".join(["(?,?,?,?,?,'sheet')"]*len(part))
+                flat=[v for row in part for v in row]
+                c.execute("INSERT INTO mkt_weekly_metrics(week,category,channel,metric,value,source) VALUES "+vals, flat)
             mark("seed_mkt_weekly_v2")
             print(f"[SEED] mkt_weekly_metrics rows={len(data)}")
         c.commit()
