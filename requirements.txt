@@ -1,4 +1,6 @@
 # 기본 실행은 Python 표준 라이브러리만으로 동작합니다.
-# 아래 패키지는 Turso(libSQL) 원격 DB로 데이터를 영구 보존할 때만 사용됩니다.
-# (환경변수 TURSO_DATABASE_URL 이 없으면 설치돼 있어도 사용하지 않습니다.)
+# 아래 패키지는 각 기능을 켤 때만 사용됩니다(환경변수 없으면 설치돼 있어도 미사용).
+# - libsql-experimental: Turso(원격 DB) 데이터 영구 보존 (TURSO_DATABASE_URL 필요)
+# - boto3: Cloudflare R2 첨부파일 저장 (R2_* 환경변수 필요)
 libsql-experimental>=0.0.49
+boto3>=1.34.0

@@ -12,6 +12,33 @@ DB = Path(os.environ.get("MODO_DB_PATH") or (BASE / "data" / "moa_work.db"))
 DB.parent.mkdir(parents=True, exist_ok=True)
 UPLOADS = Path(os.environ.get("MODO_UPLOADS_PATH") or (BASE / "uploads"))
 UPLOADS.mkdir(parents=True, exist_ok=True)
+
+# ===== 파일 저장소: Cloudflare R2 (환경변수 있으면 사용, 없으면 로컬 디스크) =====
+# 첨부파일(주간보고 최종 산출물 등)을 R2에 저장해 서버 재시작에도 유지한다.
+R2_ACCOUNT_ID   = (os.environ.get("R2_ACCOUNT_ID") or "").strip()
+R2_ACCESS_KEY   = (os.environ.get("R2_ACCESS_KEY_ID") or "").strip()
+R2_SECRET_KEY   = (os.environ.get("R2_SECRET_ACCESS_KEY") or "").strip()
+R2_BUCKET       = (os.environ.get("R2_BUCKET") or "").strip()
+USE_R2 = bool(R2_ACCOUNT_ID and R2_ACCESS_KEY and R2_SECRET_KEY and R2_BUCKET)
+_r2_client=None
+def r2():
+    global _r2_client
+    if _r2_client is None:
+        import boto3
+        _r2_client=boto3.client("s3",
+            endpoint_url=f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+            aws_access_key_id=R2_ACCESS_KEY, aws_secret_access_key=R2_SECRET_KEY,
+            region_name="auto")
+    return _r2_client
+def r2_put(key, raw, mime):
+    r2().put_object(Bucket=R2_BUCKET, Key=key, Body=raw, ContentType=(mime or "application/octet-stream"))
+def r2_presigned(key, expires=3600):
+    return r2().generate_presigned_url("get_object", Params={"Bucket":R2_BUCKET,"Key":key}, ExpiresIn=expires)
+def store_upload(rel_key, raw, mime):
+    """rel_key 예: 'weekly/5/123_file.pdf'. R2 사용 시 R2에, 아니면 로컬 UPLOADS에 저장."""
+    if USE_R2:
+        r2_put(rel_key, raw, mime); return
+    p=UPLOADS/rel_key; p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(raw)
 # 0.0.0.0 로 열어 같은 네트워크의 다른 PC가 브라우저로 접속할 수 있게 한다(1대만 서버로 실행 권장).
 # 클라우드(Render 등)는 PORT 환경변수로 포트를 지정한다 → 있으면 그 값을, 없으면 로컬 기본 8000.
 HOST = "0.0.0.0"
@@ -645,7 +672,8 @@ def ensure_schema():
             deliverable_original TEXT,      -- 원본 파일명
             deliverable_mime TEXT,
             collaborators TEXT,             -- 협업 인원 표시용 텍스트
-            collaborator_ids TEXT,          -- JSON [user_id]
+            collaborator_ids TEXT,          -- JSON [user_id] (개인 선택)
+            collaborator_teams TEXT,        -- JSON [team_id] (팀 단위 선택)
             carried_from INTEGER,           -- 이월 원본 항목 id
             carried_over INTEGER DEFAULT 0, -- 차주로 이월됨(1)
             sort_order INTEGER DEFAULT 0,
@@ -736,6 +764,16 @@ def ensure_user_columns():
         c.execute("""UPDATE users SET login_id=LOWER(SUBSTR(email,1,INSTR(email,'@')-1))
                      WHERE (login_id IS NULL OR login_id='') AND email LIKE '%@%'""")
         c.commit()
+
+def ensure_weekly_columns():
+    with db() as c:
+        try:
+            cols={r["name"] for r in c.execute("PRAGMA table_info(weekly_reports)")}
+            if cols and "collaborator_teams" not in cols:
+                c.execute("ALTER TABLE weekly_reports ADD COLUMN collaborator_teams TEXT")
+            c.commit()
+        except Exception as e:
+            print("[MIGRATE] weekly_reports:", e)
 
 def ensure_planning_columns():
     with db() as c:
@@ -864,10 +902,19 @@ class App(BaseHTTPRequestHandler):
                 ctype = "text/css" if f.suffix==".css" else "application/javascript" if f.suffix==".js" else "image/png" if f.suffix==".png" else "text/html; charset=utf-8"
                 return self.send_file(f, ctype)
             if p.startswith("/uploads/"):
-                f = safe_join(UPLOADS, unquote(p.split("/uploads/",1)[1]))
-                if not f: return self.send_error(403)
-                ctype = mimetypes.guess_type(str(f))[0] or "application/octet-stream"
-                return self.send_file(f, ctype)
+                rel = unquote(p.split("/uploads/",1)[1])
+                f = safe_join(UPLOADS, rel)
+                if f and f.exists():
+                    ctype = mimetypes.guess_type(str(f))[0] or "application/octet-stream"
+                    return self.send_file(f, ctype)
+                # 로컬에 없으면 R2에서 찾아 임시 URL로 리다이렉트
+                if USE_R2 and rel and ".." not in rel:
+                    try:
+                        url = r2_presigned(rel)
+                        self.send_response(302); self.send_header("Location", url); self.end_headers(); return
+                    except Exception as e:
+                        print("[R2] presign fail", e)
+                return self.send_error(404)
 
             with db() as c:
                 if p == "/api/users":
@@ -1576,6 +1623,8 @@ class App(BaseHTTPRequestHandler):
                     for r in rows:
                         try: r["collaborator_ids"]=json.loads(r.get("collaborator_ids") or "[]")
                         except: r["collaborator_ids"]=[]
+                        try: r["collaborator_teams"]=json.loads(r.get("collaborator_teams") or "[]")
+                        except: r["collaborator_teams"]=[]
                     members=[]
                     if team_id:
                         members=[dict(x) for x in c.execute("""SELECT id,name,rank,job_title FROM users
@@ -2377,20 +2426,21 @@ class App(BaseHTTPRequestHandler):
                     def save_deliv(item_id,b64,orig,mime):
                         if not b64: return None,None,None
                         raw=base64.b64decode(b64)
-                        wdir=UPLOADS/"weekly"/str(item_id); wdir.mkdir(parents=True,exist_ok=True)
                         safe=re.sub(r'[^\w.\-]','_',orig or 'file')
                         stored=f"{int(time.time())}_{safe}"
-                        (wdir/stored).write_bytes(raw)
+                        store_upload(f"weekly/{item_id}/{stored}", raw, mime)
                         return stored,orig,(mime or "application/octet-stream")
                     collabs=x.get("collaborator_ids") or []
+                    collab_teams=x.get("collaborator_teams") or []
                     cur=c.execute("""INSERT INTO weekly_reports(week_start,week_end,team_id,user_id,title,detail,complete_date,status,
-                        target_rate,actual_rate,deliverable,collaborators,collaborator_ids,sort_order,created_by)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        target_rate,actual_rate,deliverable,collaborators,collaborator_ids,collaborator_teams,sort_order,created_by)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (x["week_start"],x.get("week_end",""),x.get("team_id"),x.get("user_id"),x.get("title",""),x.get("detail",""),
                          x.get("complete_date"),x.get("status","미완료"),
                          (int(x["target_rate"]) if str(x.get("target_rate","")).strip()!="" else None),
                          (int(x["actual_rate"]) if str(x.get("actual_rate","")).strip()!="" else None),
                          x.get("deliverable",""),x.get("collaborators",""),json.dumps(collabs,ensure_ascii=False),
+                         json.dumps(collab_teams,ensure_ascii=False),
                          int(x.get("sort_order") or 0),x.get("created_by")))
                     wid=cur.lastrowid
                     if x.get("deliverable_base64"):
@@ -2714,11 +2764,13 @@ class App(BaseHTTPRequestHandler):
                             v=x[k]; fields.append(f"{k}=?"); args.append(int(v) if str(v).strip()!="" else None)
                     if "collaborator_ids" in x:
                         fields.append("collaborator_ids=?"); args.append(json.dumps(x["collaborator_ids"] or [],ensure_ascii=False))
+                    if "collaborator_teams" in x:
+                        fields.append("collaborator_teams=?"); args.append(json.dumps(x["collaborator_teams"] or [],ensure_ascii=False))
                     if x.get("deliverable_base64"):
                         raw=base64.b64decode(x["deliverable_base64"])
-                        wdir=UPLOADS/"weekly"/str(wid); wdir.mkdir(parents=True,exist_ok=True)
                         safe=re.sub(r'[^\w.\-]','_',x.get("deliverable_name") or 'file')
-                        stored=f"{int(time.time())}_{safe}"; (wdir/stored).write_bytes(raw)
+                        stored=f"{int(time.time())}_{safe}"
+                        store_upload(f"weekly/{wid}/{stored}", raw, x.get("deliverable_mime"))
                         fields+=["deliverable_file=?","deliverable_original=?","deliverable_mime=?"]
                         args+=[stored,x.get("deliverable_name"),x.get("deliverable_mime") or "application/octet-stream"]
                     if not fields: return self.send_json({"error":"변경할 항목이 없습니다."},400)
@@ -3192,6 +3244,7 @@ def main():
     ensure_user_columns()
     ensure_calendar_columns()
     ensure_planning_columns()
+    ensure_weekly_columns()
     with db() as c:
         c.execute("UPDATE users SET role='SUPER_ADMIN' WHERE name IN ('정해근','이원행')")
         c.execute("UPDATE users SET account_status=CASE WHEN COALESCE(active,1)=1 THEN 'ACTIVE' ELSE 'RETIRED' END WHERE account_status IS NULL OR account_status=''")
