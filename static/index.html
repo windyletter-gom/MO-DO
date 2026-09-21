@@ -381,7 +381,7 @@ input,select,textarea{width:100%;padding:9px;border:1px solid var(--line);border
 <div class="top"><div><h2 id="pageTitle">홈</h2><div class="muted" id="hello"></div></div><div class="userbox"><span class="uname" id="ub_name"></span><button class="btn-mini" onclick="changePasswordModal()">개인 설정</button><button class="btn-mini" onclick="doLogout()">로그아웃</button></div></div>
 <div id="view"></div>
 </main></div>
-<div id="modal" class="modal" onclick="if(event.target===this)closeModal()"><div class="modalbox"><div class="row" style="justify-content:space-between"><h3 id="modalTitle"></h3><button class="btn secondary" onclick="closeModal()">닫기</button></div><div id="modalBody"></div></div></div>
+<div id="modal" class="modal"><div class="modalbox"><div class="row" style="justify-content:space-between"><h3 id="modalTitle"></h3><button class="btn secondary" onclick="closeModal()">닫기</button></div><div id="modalBody"></div></div></div>
 <script>
 let users=[],teams=[],projects=[],currentUser=null,currentView='home',calDate=new Date(),navContext={workspaceTeamId:null,workspaceSection:null,projectId:null,boardId:null,projectMode:null};
 const statusNames={TODO:'업무대기',IN_PROGRESS:'진행중',BLOCKED:'막힘',REVIEW:'검토/확인',DONE:'완료'};
@@ -1724,6 +1724,7 @@ function wkSelectTeam(tid){window._wkTeamId=tid;weeklyReport()}
 function wkItemModal(uid,itemId){
  let it=itemId?(window._wkData.items||[]).find(x=>x.id===itemId):null;
  window._wkCollabSel=new Set((it&&it.collaborator_ids)||[]);
+ window._wkCollabTeams=new Set((it&&it.collaborator_teams)||[]);
  let member=(window._wkData.members||[]).find(m=>m.id===uid);
  showModal((itemId?'주간 업무 수정':'주간 업무 등록')+` · ${esc(member?member.name:'')}`,`
   <label>업무명</label><input id="wk_title" value="${esc(it?it.title:'')}">
@@ -1735,7 +1736,15 @@ function wkItemModal(uid,itemId){
   <label>협업 인원(팀)</label><div class="row" style="gap:8px"><button class="btn secondary" type="button" onclick="wkOpenCollab()">+ 협업 인원 선택</button><span id="wk_collab_txt" class="muted">${esc(it?it.collaborators||'없음':'없음')}</span></div>
   <div class="row" style="justify-content:flex-end;margin-top:14px;gap:6px"><button class="btn secondary" onclick="closeModal()">취소</button><button class="btn" onclick="saveWkItem(${uid},${itemId||'null'})">저장</button></div>`);
 }
-function wkCollabNames(){let sel=(users||[]).filter(u=>window._wkCollabSel&&window._wkCollabSel.has(u.id));return sel.map(u=>`${u.name}${u.team_name?'('+u.team_name+')':''}`).join(', ')}
+function wkCollabText(){
+ let teamNames=(teams||[]).filter(t=>window._wkCollabTeams&&window._wkCollabTeams.has(t.id)).map(t=>/팀$/.test(t.name)?t.name:t.name+'팀');
+ let indiv=(users||[]).filter(u=>window._wkCollabSel&&window._wkCollabSel.has(u.id) && !(window._wkCollabTeams&&window._wkCollabTeams.has(u.team_id))).map(u=>`${u.name}${u.team_name?'('+u.team_name+')':''}`);
+ return [...teamNames,...indiv].join(', ');
+}
+function wkToggleTeamCollab(tid,checked){
+ let grid=document.querySelector(`#wkCollabPop .wk-collab-grid[data-team="${tid}"]`);
+ if(grid){grid.style.opacity=checked?'.35':'';grid.style.pointerEvents=checked?'none':'';}
+}
 function wkOpenCollab(){
  let old=document.getElementById('wkCollabPop');if(old)old.remove();
  let pop=document.createElement('div');pop.id='wkCollabPop';
@@ -1743,14 +1752,19 @@ function wkOpenCollab(){
  let byTeam=teams.filter(t=>t.active).map(t=>{
    let ms=(users||[]).filter(u=>u.active!==0&&u.team_id===t.id);
    if(!ms.length)return '';
-   return `<div style="margin-bottom:10px"><b>${esc(t.name)}</b><div class="checkbox-grid" style="grid-template-columns:repeat(3,1fr);margin-top:6px">${ms.map(u=>`<label class="check-card"><input type="checkbox" class="wk_collab_cb" value="${u.id}" ${window._wkCollabSel.has(u.id)?'checked':''}> ${esc(u.name)} <span class="muted">${u.rank||''}</span></label>`).join('')}</div></div>`;
+   let tc=window._wkCollabTeams&&window._wkCollabTeams.has(t.id);
+   return `<div style="margin-bottom:12px;border:1px solid var(--line);border-radius:10px;padding:10px 12px">
+     <label class="row" style="gap:8px;font-weight:600;cursor:pointer"><input type="checkbox" class="wk_collab_teamcb" value="${t.id}" ${tc?'checked':''} onchange="wkToggleTeamCollab(${t.id},this.checked)" style="width:auto"> ${esc(t.name)} <span class="pill" style="font-weight:400">팀 전체 선택</span></label>
+     <div class="checkbox-grid wk-collab-grid" data-team="${t.id}" style="grid-template-columns:repeat(3,1fr);margin-top:8px;${tc?'opacity:.35;pointer-events:none':''}">${ms.map(u=>`<label class="check-card"><input type="checkbox" class="wk_collab_cb" value="${u.id}" ${window._wkCollabSel.has(u.id)?'checked':''}> ${esc(u.name)} <span class="muted">${u.rank||''}</span></label>`).join('')}</div>
+   </div>`;
  }).join('');
- pop.innerHTML=`<div style="background:#fff;border-radius:14px;padding:18px;max-width:760px;width:92%;max-height:82vh;overflow:auto"><div class="row" style="justify-content:space-between"><h3>협업 인원 선택</h3><button class="btn secondary" onclick="document.getElementById('wkCollabPop').remove()">닫기</button></div><div class="muted" style="margin:6px 0">팀별 구성원을 선택하세요.</div>${byTeam}<div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" onclick="wkConfirmCollab()">선택 완료</button></div></div>`;
+ pop.innerHTML=`<div style="background:#fff;border-radius:14px;padding:18px;max-width:820px;width:94%;max-height:84vh;overflow:auto"><div class="row" style="justify-content:space-between"><h3>협업 인원 선택</h3><button class="btn secondary" onclick="document.getElementById('wkCollabPop').remove()">닫기</button></div><div class="muted" style="margin:6px 0">팀 전체가 협업하면 <b>팀 전체 선택</b>을, 특정 인원만이면 개인을 체크하세요. (팀 전체를 고르면 그 팀은 이름만 '○○팀'으로 표시됩니다.)</div>${byTeam}<div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" onclick="wkConfirmCollab()">선택 완료</button></div></div>`;
  document.body.appendChild(pop);
 }
 function wkConfirmCollab(){
+ window._wkCollabTeams=new Set([...document.querySelectorAll('.wk_collab_teamcb:checked')].map(c=>+c.value));
  window._wkCollabSel=new Set([...document.querySelectorAll('.wk_collab_cb:checked')].map(c=>+c.value));
- document.getElementById('wk_collab_txt').textContent=wkCollabNames()||'없음';
+ document.getElementById('wk_collab_txt').textContent=wkCollabText()||'없음';
  let p=document.getElementById('wkCollabPop');if(p)p.remove();
 }
 async function saveWkItem(uid,itemId){
@@ -1760,7 +1774,7 @@ async function saveWkItem(uid,itemId){
  let payload={actor_id:currentUser.id,week_start:wkFmt(mon),week_end:wkFmt(sun),team_id:window._wkTeamId,user_id:uid,
    title,detail:wk_detail.value,complete_date:wk_cdate.value||null,status:wk_status.value,
    target_rate:wk_target.value,actual_rate:wk_actual.value,deliverable:wk_deliv.value,
-   collaborator_ids:[...window._wkCollabSel],collaborators:wkCollabNames(),created_by:currentUser.id};
+   collaborator_ids:[...window._wkCollabSel],collaborator_teams:[...(window._wkCollabTeams||[])],collaborators:wkCollabText(),created_by:currentUser.id};
  let f=document.getElementById('wk_file').files[0];
  if(f){payload.deliverable_base64=await fileToBase64(f);payload.deliverable_name=f.name;payload.deliverable_mime=f.type||'application/octet-stream'}
  try{
