@@ -1436,7 +1436,7 @@ async function workspaceSection(tid,code,btn){
 }
 
 /* ================= 취소·환불 내역 대시보드 (서비스운영팀 등록 / 전 팀 열람) ================= */
-let _refundData=null, _refundGran='all', _refundPeriod='', _refundCourse='';
+let _refundData=null, _refundGran='all', _refundPeriod='', _refundCourse='', _refundPackage='';
 function refundMaskName(n){n=(n==null?'':String(n)).trim();if(!n)return '';if(n.length<=1)return n;if(n.length===2)return n[0]+'*';return n[0]+'*'.repeat(n.length-2)+n.slice(-1);}
 function refundFmtWon(v){return (Math.round(+v||0)).toLocaleString('ko-KR')+'원';}
 function refundStr(v){return v==null?'':String(v).trim();}
@@ -1528,10 +1528,12 @@ function refundCategory(t){
 const REFUND_PALETTE=['#2a78d6','#eb6834','#1baf7a','#eda100','#e87ba4','#008300','#4a3aa7'];
 function refundKey(r,gran){let d=(r.recv_date||'').slice(0,10);if(!d)return '';return gran==='year'?d.slice(0,4):gran==='month'?d.slice(0,7):refundWeekStart(d);}
 function refundPeriodsFor(gran){let set={};((_refundData&&_refundData.records)||[]).forEach(r=>{let k=refundKey(r,gran);if(k)set[k]=1;});return Object.keys(set).sort().reverse();}
-function refundSetGran(g,tid){_refundGran=g;_refundCourse='';_refundPeriod=(g==='all')?'':(refundPeriodsFor(g)[0]||'');renderRefund(tid);}
-function refundSetPeriod(v,tid){_refundPeriod=v;_refundCourse='';renderRefund(tid);}
+function refundSetGran(g,tid){_refundGran=g;_refundCourse='';_refundPackage='';_refundPeriod=(g==='all')?'':(refundPeriodsFor(g)[0]||'');renderRefund(tid);}
+function refundSetPeriod(v,tid){_refundPeriod=v;_refundCourse='';_refundPackage='';renderRefund(tid);}
 function refundSetCourse(v,tid){_refundCourse=v;renderRefund(tid);}
 function refundSetCourseIdx(i,tid){let arr=window._refundCourseArr||[];let c=arr[i];if(!c)return;_refundCourse=(c.course===_refundCourse?'':c.course);renderRefund(tid);}
+function refundSetPackage(v,tid){_refundPackage=v;renderRefund(tid);}
+function refundSetPkgIdx(i,tid){let arr=window._refundPkgArr||[];let c=arr[i];if(!c)return;_refundPackage=(c.package===_refundPackage?'':c.package);renderRefund(tid);}
 function refundDonutSVG(items,total){
  let R=58,sw=26,C=2*Math.PI*R,acc=0;
  let segs=items.map(it=>{let f=total?it.value/total:0;let seg=f*C;let s=`<circle r="${R}" cx="80" cy="80" fill="none" stroke="${it.color}" stroke-width="${sw}" stroke-dasharray="${seg.toFixed(2)} ${(C-seg).toFixed(2)}" stroke-dashoffset="${(-acc).toFixed(2)}" transform="rotate(-90 80 80)"><title>${esc(it.label)}: ${it.value}건</title></circle>`;acc+=seg;return s;}).join('');
@@ -1543,7 +1545,9 @@ function renderRefund(tid){
  let canUpload=(currentUser.team_id===6)||isSuperAdmin()||(currentUser.role==='DIVISION_ADMIN');
  let totCount=recs.length,totRefund=recs.reduce((s,r)=>s+(+r.refund_amount||0),0),totAvg=totCount?totRefund/totCount:0;
  let periodFiltered=(_refundGran==='all'||!_refundPeriod)?recs:recs.filter(r=>refundKey(r,_refundGran)===_refundPeriod);
- let filtered=_refundCourse?periodFiltered.filter(r=>(r.course||'')===_refundCourse):periodFiltered;
+ let filtered=periodFiltered;
+ if(_refundCourse) filtered=filtered.filter(r=>(r.course||'')===_refundCourse);
+ if(_refundPackage) filtered=filtered.filter(r=>(r.package||'(미기재)')===_refundPackage);
  let pCount=periodFiltered.length,pRefund=periodFiltered.reduce((s,r)=>s+(+r.refund_amount||0),0),pAvg=pCount?pRefund/pCount:0;
  let periodLabel=_refundGran==='all'?'전체기간':((_refundPeriod||'전체')+(_refundGran==='week'?' 주간':''));
  // 추이 막대(all이면 연도별). all 외에는 막대 클릭으로 기간 선택.
@@ -1569,6 +1573,11 @@ function renderRefund(tid){
  let courseArr=Object.values(courseMap).sort((a,b)=>b.count-a.count).slice(0,25);
  window._refundCourseArr=courseArr;
  let courseRows=courseArr.map((cs,i)=>`<tr onclick="refundSetCourseIdx(${i},${tid})" style="cursor:pointer;${cs.course===_refundCourse?'background:#f0eeff':''}"><td style="max-width:300px">${esc(cs.course)}</td><td style="text-align:right">${cs.count}건</td><td style="text-align:right">${refundFmtWon(cs.refund)}</td></tr>`).join('')||'<tr><td colspan="3" class="muted">데이터가 없습니다.</td></tr>';
+ // 패키지분류별(기간 필터 기준)
+ let pkgMap={};periodFiltered.forEach(r=>{let pn=(r.package||'(미기재)');let m=pkgMap[pn]||(pkgMap[pn]={package:pn,count:0,refund:0});m.count++;m.refund+=(+r.refund_amount||0);});
+ let pkgArr=Object.values(pkgMap).sort((a,b)=>b.count-a.count).slice(0,30);
+ window._refundPkgArr=pkgArr;
+ let pkgRows=pkgArr.map((ps,i)=>`<tr onclick="refundSetPkgIdx(${i},${tid})" style="cursor:pointer;${ps.package===_refundPackage?'background:#f0eeff':''}"><td style="max-width:220px">${esc(ps.package)}</td><td style="text-align:right">${ps.count}건</td><td style="text-align:right">${refundFmtWon(ps.refund)}</td></tr>`).join('')||'<tr><td colspan="3" class="muted">데이터가 없습니다.</td></tr>';
  let det=filtered.slice().sort((a,b)=>(a.recv_date<b.recv_date?1:-1)).map(r=>`<tr>
      <td>${esc(r.recv_date||'')}</td><td>${esc(r.ct||r.orderer_mask||'')}</td><td>${esc(r.package||'')}</td>
      <td style="max-width:220px">${esc(r.course||'')}</td><td>${esc(r.pay_method||'')}</td>
@@ -1605,16 +1614,20 @@ function renderRefund(tid){
   </div>
   <div class="row" style="gap:12px;flex-wrap:wrap;align-items:stretch">
     <div class="card section" style="flex:1;min-width:280px">
-      <div class="page-kicker" style="margin-bottom:8px">환불 사유 분포 <span class="muted">· ${esc(periodLabel)}${_refundCourse?' · '+esc(_refundCourse):''}</span></div>
+      <div class="page-kicker" style="margin-bottom:8px">환불 사유 분포 <span class="muted">· ${esc(periodLabel)}${_refundCourse?' · '+esc(_refundCourse):''}${_refundPackage?' · '+esc(_refundPackage):''}</span></div>
       <div class="row" style="gap:14px;align-items:center;flex-wrap:wrap"><div style="flex:none">${refundDonutSVG(pieItems,pieTotal)}</div><div style="flex:1;min-width:180px">${legend||'<div class="muted">데이터가 없습니다.</div>'}</div></div>
     </div>
     <div class="card section" style="flex:1;min-width:300px;overflow-x:auto">
       <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px"><div class="page-kicker">강의명별 환불 <span class="muted">· 행 클릭 시 필터</span></div>${_refundCourse?`<button class="btn secondary" style="padding:2px 8px" onclick="refundSetCourse('',${tid})">전체 강의</button>`:''}</div>
       <table style="min-width:420px"><thead><tr><th>강의명</th><th>건수</th><th>환불금액</th></tr></thead><tbody>${courseRows}</tbody></table>
     </div>
+    <div class="card section" style="flex:1;min-width:280px;overflow-x:auto">
+      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px"><div class="page-kicker">패키지분류별 환불 <span class="muted">· 행 클릭 시 필터</span></div>${_refundPackage?`<button class="btn secondary" style="padding:2px 8px" onclick="refundSetPackage('',${tid})">전체 패키지</button>`:''}</div>
+      <table style="min-width:360px"><thead><tr><th>패키지분류</th><th>건수</th><th>환불금액</th></tr></thead><tbody>${pkgRows}</tbody></table>
+    </div>
   </div>
   <div class="card section" style="overflow-x:auto">
-    <div class="page-kicker" style="margin-bottom:6px">상세 내역 <span class="muted">· ${esc(periodLabel)}${_refundCourse?' · '+esc(_refundCourse):''} · ${filtered.length}건${_refundData&&_refundData.access==='own'?' · 본인 담당 건만 표시':''}</span></div>
+    <div class="page-kicker" style="margin-bottom:6px">상세 내역 <span class="muted">· ${esc(periodLabel)}${_refundCourse?' · '+esc(_refundCourse):''}${_refundPackage?' · '+esc(_refundPackage):''} · ${filtered.length}건${_refundData&&_refundData.access==='own'?' · 본인 담당 건만 표시':''}</span></div>
     <table style="min-width:900px"><thead><tr><th>접수일</th><th>담당 CT/교수</th><th>패키지분류</th><th>강의명</th><th>결제수단</th><th>판매금액</th><th>환불금액</th><th>환불사유</th></tr></thead>
     <tbody>${det||'<tr><td colspan="8" class="muted">해당 조건의 내역이 없습니다.</td></tr>'}</tbody></table>
   </div>`;
