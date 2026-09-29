@@ -547,7 +547,7 @@ async function home(){
  <div class="flow-card section">
    <div class="flow-title row" style="justify-content:space-between"><div><div class="page-kicker">WORKSPACE FLOW</div><h3>업무 진행 처리 현황</h3></div><button class="btn secondary" onclick="projectList()">프로젝트 보기 →</button></div>
    <div class="flow-grid">
-     ${flowStep('대기',todo.length,25,'TODO')}${flowStep('진행 중',doing.length,45,'IN_PROGRESS')}${flowStep('검토 대기',review.length,20,'REVIEW')}${flowStep('완료',done.length,completion,'DONE')}
+     ${(()=>{let ft=todo.length+doing.length+review.length+done.length||1;return flowStep('대기',todo.length,todo.length/ft*100,'TODO')+flowStep('진행 중',doing.length,doing.length/ft*100,'IN_PROGRESS')+flowStep('검토 대기',review.length,review.length/ft*100,'REVIEW')+flowStep('완료',done.length,done.length/ft*100,'DONE');})()}
      <div class="flow-side"><div class="muted">현재 승인 병목</div><b>${waitingApprovals?'승인 대기 '+waitingApprovals+'건':'병목 없음'}</b><div class="muted">${waitingApprovals?'확인 필요':'정상 운영'}</div></div>
      <div class="flow-side"><div class="muted">프로젝트 평균 진행률</div><b>${avg}%</b><div class="muted">${projectsNow.length}개 프로젝트</div></div>
      <div class="flow-side"><div class="muted">이번 주 완료율</div><b>${completion}%</b><div class="muted">전체 업무 기준</div></div>
@@ -775,13 +775,46 @@ function metric(t,n,onclick=''){return `<div class="card metric ${onclick?'click
 function reqList(a){return a.length?a.map(r=>`<div class="req"><div class="row"><span class="pill">${r.type}</span><span class="pill ${r.priority}">${priorityNames[r.priority]||r.priority}</span><span class="pill">${r.status}</span></div><b>${esc(r.title)}</b><div class="muted">${r.requester_name||''}${r.target_name?' → '+r.target_name:''}${r.target_team_name?' / '+r.target_team_name:''}${r.due_date?' · '+r.due_date:''}</div><div style="margin-top:8px">${esc(r.content||'')}</div><button class="btn secondary" style="margin-top:8px" onclick="openRequestThread(${r.id})">${(r.target_user_id==currentUser.id||r.target_team_id==currentUser.team_id)?'내용 확인 / 답변':'대화 보기'}</button></div>`).join(''):'<div class="muted">없습니다.</div>'}
 const MYWORK_TABS={mine:'내 업무',team:'우리 팀',related:'관련 팀',department:'부서 공유',approval:'업무 승인 현황',history:'업무 히스토리'};
 function myworkTabsHtml(active){return `<div class="view-tabs section">${Object.entries(MYWORK_TABS).map(([k,v])=>`<button class="${active===k?'active':''}" onclick="mywork('${k}')">${v}</button>`).join('')}</div>`}
+function myworkWeeklyCard(it){
+ let promoted=!!it.promoted_task_id;
+ return `<div class="card" style="margin:6px 0;padding:10px 12px;background:#faf9ff">
+   <div class="row" style="justify-content:space-between;align-items:flex-start;gap:8px">
+     <div style="flex:1;min-width:0">
+       <b>${esc(it.title||'')}</b> ${wkStatusPill(it.status)}${it.carried_from?' <span class="pill" style="background:#eef;color:#66c">이월</span>':''}
+       ${it.detail?`<div class="muted" style="font-size:12px;margin-top:3px">${esc(it.detail)}</div>`:''}
+       <div class="muted" style="font-size:11px;margin-top:3px">완료일정 ${it.complete_date||'-'} · 협업 ${esc(wkCollabDisplay(it))}</div>
+     </div>
+     <div style="flex:none">${promoted?'<span class="pill" style="background:#e7f6ee;color:#177a4a">관리 업무 승격됨</span>':`<button class="btn secondary" style="padding:4px 10px" onclick="promoteWeekly(${it.id})">관리 업무로 승격</button>`}</div>
+   </div>
+ </div>`;
+}
+function promoteWeekly(weeklyId){
+ let it=(window._myWeeklyItems||[]).find(x=>x.id===weeklyId);
+ if(!it){toast('업무 정보를 찾을 수 없습니다.');return}
+ generalTaskModal();
+ window._promoteWeeklyId=weeklyId;
+ setTimeout(()=>{
+   let tt=document.getElementById('gt_title');if(tt)tt.value=it.title||'';
+   let dd=document.getElementById('gt_desc');if(dd)dd.value=it.detail||'';
+   let du=document.getElementById('gt_due');if(du&&it.complete_date)du.value=it.complete_date;   // 완료일정 → 마감일(캘린더/일정관리 연계)
+   let tid=it.team_id||currentUser.team_id;
+   let tm=document.getElementById('gt_team');if(tm){tm.value=String(tid);generalTaskTeamChanged(tid);}
+   setTimeout(()=>{let pk=document.getElementById('gt_assignee_pick');if(pk&&[...pk.options].some(o=>o.value===String(it.user_id))){pk.value=String(it.user_id);addTaskAssignee();}},160);
+ },60);
+}
 async function mywork(scope='mine'){
  if(scope==='history')return workHistoryView();
  if(scope==='approval')return approvalStatusView();
- let [tasks,templates]=await Promise.all([api(`/api/work-management?viewer_id=${currentUser.id}&scope=${scope}`),api(`/api/templates?template_type=TASK&team_id=${currentUser.team_id||0}`)]);
+ let _mon=wkMondayOf(new Date()),_sun=new Date(_mon);_sun.setDate(_mon.getDate()+6);
+ let _ws=wkFmt(_mon),_we=wkFmt(_sun);
+ let [tasks,templates,_weeklyData]=await Promise.all([api(`/api/work-management?viewer_id=${currentUser.id}&scope=${scope}`),api(`/api/templates?template_type=TASK&team_id=${currentUser.team_id||0}`),api(`/api/weekly?team_id=${currentUser.team_id||0}&week_start=${_ws}&week_end=${_we}`).catch(()=>({items:[]}))]);
  window._myWorkTasks=tasks;window._myWorkScope=scope;
+ let _myWeekly=(_weeklyData.items||[]).filter(it=>it.user_id===currentUser.id);
+ window._myWeeklyItems=_myWeekly;
+ let weeklySection=(scope==='mine')?`<div class="card section" style="border-left:4px solid #6b5cff"><div class="row" style="justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:6px"><div><b>이번 주 주간보고 업무</b> <span class="muted">${wkMD(_mon)}~${wkMD(_sun)}</span><div class="muted" style="font-size:12px">주간보고에 적은 업무가 자동으로 표시됩니다. 승인·검토가 필요한 업무만 '관리 업무로 승격'을 누르세요.</div></div><button class="btn secondary" onclick="currentView='weekly';render()">주간보고 열기 →</button></div><div style="margin-top:8px">${_myWeekly.length?_myWeekly.map(myworkWeeklyCard).join(''):'<div class="muted">이번 주 등록된 주간보고 업무가 없습니다.</div>'}</div></div>`:'';
  view.innerHTML=`<div class="row" style="justify-content:space-between"><div><div class="eyebrow">WORK MANAGEMENT</div><h2>업무 관리</h2><div class="muted">업무를 드래그하여 처리 단계를 변경하고 기존 업무 양식을 재사용할 수 있습니다.</div></div><div class="row"><button class="btn secondary" onclick="templateLibrary('TASK')">업무 양식</button><button class="btn" onclick="generalTaskModal()">+ 새 업무 등록</button></div></div>
  <div class="guide-strip section"><div class="row"><div class="guide-icon">?</div><div><b>업무 관리 화면 가이드</b><div class="muted">업무 등록·공유·단계 이동·완료 처리 기준</div></div></div><div class="row"><button class="btn secondary" onclick="showScreenGuide('mywork')">가이드 보기</button><button class="btn secondary" onclick="downloadScreenGuide('mywork')">상세 가이드 다운로드</button></div></div>
+ ${weeklySection}
  ${templates.length?`<div class="template-bar"><b>최근 업무 양식</b>${templates.slice(0,4).map(t=>`<button class="btn secondary" onclick="useTaskTemplate(${t.id})">${esc(t.name)}</button>`).join('')}</div>`:''}
  ${myworkTabsHtml(scope)}
  <div class="card section"><div class="row" style="justify-content:space-between"><div><b>${MYWORK_TABS[scope]}</b><div class="muted">카드를 원하는 단계로 끌어놓으면 즉시 저장됩니다.</div></div><span class="pill clickable" onclick="showMyWorkList('ALL')">${tasks.length}건</span></div></div>
@@ -896,6 +929,7 @@ function workManagementCard(t){
 async function startTask(id){await api(`/api/tasks/${id}/move`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:'IN_PROGRESS',order:Date.now()%1000000,actor_id:currentUser.id})});toast('업무를 시작했습니다.');afterTaskAction()}
 
 function generalTaskModal(){
+ window._promoteWeeklyId=null;
  let defaultTeam=currentUser.team_id||teams.find(t=>t.active)?.id;
  document.getElementById('modal').classList.add('full-modal');
  showModal('새 업무 등록',`<div class="newwork-head"><div class="eyebrow">NEW WORK</div><h2>새 업무 등록</h2><div class="muted">업무 분류, 공개 범위와 완료 절차를 지정합니다.</div></div>
@@ -993,7 +1027,11 @@ async function saveGeneralTask(){
  let related=[...document.querySelectorAll('.gt_related:checked')].map(x=>x.value).join(',');
  let assignees=(window._gtAssignees||[]).map(a=>({user_id:a.user_id,role_label:a.role_label||''}));
  let primary=assignees[0]?assignees[0].user_id:null;
- await api('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project_id:null,work_type:'GENERAL',title:gt_title.value.trim(),team_id:+gt_team.value,assignee_id:primary,assignees,category:gt_category.value,priority:gt_priority.value,due_date:gt_due.value||null,description:gt_desc.value,visibility_scope:gt_visibility.value,related_team_ids:related,completion_mode:gt_completion.value,reviewer_id:gt_completion.value==='REVIEW'?(window._gtApprovalIds?.[0]||null):null,approver_ids:gt_completion.value==='REVIEW'?(window._gtApprovalIds||[]):[],created_by:currentUser.id})});
+ let _tres=await api('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project_id:null,work_type:'GENERAL',title:gt_title.value.trim(),team_id:+gt_team.value,assignee_id:primary,assignees,category:gt_category.value,priority:gt_priority.value,due_date:gt_due.value||null,description:gt_desc.value,visibility_scope:gt_visibility.value,related_team_ids:related,completion_mode:gt_completion.value,reviewer_id:gt_completion.value==='REVIEW'?(window._gtApprovalIds?.[0]||null):null,approver_ids:gt_completion.value==='REVIEW'?(window._gtApprovalIds||[]):[],created_by:currentUser.id})});
+ if(window._promoteWeeklyId&&_tres&&_tres.id){
+   try{await api('/api/weekly/'+window._promoteWeeklyId+'/promote',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor_id:currentUser.id,task_id:_tres.id})});}catch(e){}
+   window._promoteWeeklyId=null;
+ }
  closeModal();document.getElementById('modal').classList.remove('full-modal');toast('일반 업무를 등록했습니다.');mywork('mine');
 }
 async function managementMyWork(isDivision){
@@ -1906,7 +1944,7 @@ async function weeklyReport(){
      let deliv=(it.deliverable_file?`<a href="/uploads/weekly/${it.id}/${encodeURIComponent(it.deliverable_file)}" target="_blank">📎 ${esc(it.deliverable_original||'파일')}</a><br>`:'')+esc(it.deliverable||'');
      let actions=can?`<div class="row" style="gap:4px;flex-wrap:wrap"><button class="btn secondary" style="padding:2px 6px" onclick="wkItemModal(${m.id},${it.id})">수정</button>${it.carried_over?'<span class="pill">이월됨</span>':`<button class="btn secondary" style="padding:2px 6px" onclick="wkCarry(${it.id})">차주 이월</button>`}<button class="btn secondary" style="padding:2px 6px;color:#c0392b;border-color:#e6b8b2" onclick="wkDelete(${it.id})">삭제</button></div>`:'';
      return `<tr>${i===0?`<td rowspan="${its.length}" style="vertical-align:top"><b>${esc(m.name)}</b><div class="muted" style="font-size:11px">${m.rank||''}</div>${can?`<div style="margin-top:6px">${addBtn}</div>`:''}</td>`:''}
-       <td><b>${esc(it.title||'')}</b>${it.carried_from?' <span class="pill" style="background:#eef;color:#66c">이월</span>':''}${it.updated_by_name?`<div class="muted" style="font-size:10px;margin-top:2px">최종수정: ${esc(it.updated_by_name)} · ${(it.updated_at||'').slice(0,10)}</div>`:''}</td>
+       <td><b>${esc(it.title||'')}</b>${it.carried_from?' <span class="pill" style="background:#eef;color:#66c">이월</span>':''}${it.promoted_task_id?' <span class="pill" style="background:#e7f6ee;color:#177a4a">관리 업무</span>':''}${it.updated_by_name?`<div class="muted" style="font-size:10px;margin-top:2px">최종수정: ${esc(it.updated_by_name)} · ${(it.updated_at||'').slice(0,10)}</div>`:''}</td>
        <td style="max-width:220px">${esc(it.detail||'')}</td>
        ${isMCC?`<td>${it.start_date?it.start_date:'-'}</td>`:''}
        <td>${it.complete_date?it.complete_date:'-'}<div>${wkStatusPill(it.status)}</div></td>
