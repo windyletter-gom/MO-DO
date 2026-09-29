@@ -496,7 +496,7 @@ async function afterTaskAction(){
 }
 async function reopenWorkspaceSection(tid,code){
  let w=await api('/api/workspace/'+tid);pageTitle.textContent=`${w.team.name} WORKSPACE`;
- let common=[['OVERVIEW','오버뷰'],['TASKS','업무/프로젝트'],['SCHEDULE','일정 관리'],['MEETING','회의록'],['PURCHASE','구매내역'],['BOOK','독서토론'],['CHECKLIST','체크리스트'],['RESOURCE','자료/링크'],['DATACENTER','데이터 관리 센터'],['DATABOARD','데이터보드'],['KPI','KPI']];
+ let common=[['OVERVIEW','오버뷰'],['TASKS','업무/프로젝트'],['SCHEDULE','일정 관리'],['MEETING','회의록'],['PURCHASE','구매내역'],['BOOK','독서토론'],['CHECKLIST','체크리스트'],['RESOURCE','자료/링크'],['DATACENTER','데이터 관리 센터'],['DATABOARD','데이터보드'],['CXREFUND','취소·환불 내역']];
  if(tid===1) common.splice(2,0,['FILMING','강의촬영(콘.제작)']);
  if(tid===1) common.splice(8,0,['REFUND','환불과정 관리'],['MCC_REVIEW','교재·법령 검수']);
  if(tid===6){
@@ -1290,7 +1290,7 @@ async function openWorkspace(tid){
  let w=await api('/api/workspace/'+tid);pageTitle.textContent=`${w.team.name} WORKSPACE`;
  let common=[
  ['OVERVIEW','오버뷰'],['TASKS','업무/프로젝트'],['SCHEDULE','일정 관리'],['MEETING','회의록'],['PURCHASE','구매내역'],
- ['BOOK','독서토론'],['CHECKLIST','체크리스트'],['RESOURCE','자료/링크'],['DATACENTER','데이터 관리 센터'],['DATABOARD','데이터보드'],['KPI','KPI']
+ ['BOOK','독서토론'],['CHECKLIST','체크리스트'],['RESOURCE','자료/링크'],['DATACENTER','데이터 관리 센터'],['DATABOARD','데이터보드'],['CXREFUND','취소·환불 내역']
  ];
  if(tid===1) common.splice(2,0,['FILMING','강의촬영(콘.제작)']);
  if(tid===1) common.splice(8,0,['REFUND','환불과정 관리'],['MCC_REVIEW','교재·법령 검수']);
@@ -1391,7 +1391,131 @@ async function workspaceSection(tid,code,btn){
  if(code==='RESOURCE'){window._resRows=w.resources;window._resTid=tid;body.innerHTML=`<div class="row" style="justify-content:flex-end"><button class="btn" onclick="resourceModal(${tid})">+ 자료/링크</button></div>${w.resources.map(r=>`<div class="card section"><div class="row" style="justify-content:space-between"><div><b>${esc(r.title)}</b><div class="muted">${r.resource_type} · ${esc(r.description||'')}</div>${r.url?`<a href="${r.url}" target="_blank">${r.resource_type==='FILE'?'📎 첨부파일 열기':esc(r.url)}</a>`:''}</div><div class="row" style="gap:6px"><button class="btn secondary" onclick="resourceModal(${tid},${r.id})">수정</button><button class="btn secondary" style="color:#c0392b;border-color:#e6b8b2" onclick="resourceDelete(${r.id})">삭제</button></div></div></div>`).join('')||'<div class="muted">등록된 자료/링크가 없습니다.</div>'}`;return}
  if(code==='DATACENTER'){return dataCenterView(tid)}
  if(code==='DATABOARD'){body.innerHTML=`<div class="row" style="justify-content:flex-end"><button class="btn" onclick="boardCreateModal(${tid})">+ 데이터보드 만들기</button></div><div class="workspace-grid section">${w.boards.map(b=>`<div class="card module-card" onclick="openBoardInWorkspace(${tid},${b.id})"><h3>${b.name}</h3><div class="muted">${b.description||''}</div></div>`).join('')||'<div class="muted">등록된 데이터보드가 없습니다.</div>'}</div>`;return}
+ if(code==='CXREFUND'){return refundLogSection(tid);}
  if(code==='KPI'){body.innerHTML=`<div class="card"><h3>KPI</h3><div class="muted">개인/팀 목표, 실적, 달성률 관리 영역입니다. 운영 테스트 후 실제 KPI 항목을 팀별로 정의해 연결합니다.</div></div>`;return}
+}
+
+/* ================= 취소·환불 내역 대시보드 (서비스운영팀 등록 / 전 팀 열람) ================= */
+let _refundData=null, _refundGran='month';
+function refundMaskName(n){n=(n==null?'':String(n)).trim();if(!n)return '';if(n.length<=1)return n;if(n.length===2)return n[0]+'*';return n[0]+'*'.repeat(n.length-2)+n.slice(-1);}
+function refundFmtWon(v){return (Math.round(+v||0)).toLocaleString('ko-KR')+'원';}
+function refundStr(v){return v==null?'':String(v).trim();}
+function refundNum(v){if(v==null||v==='')return null;let n=parseFloat(String(v).replace(/[^0-9.\-]/g,''));return isNaN(n)?null:n;}
+function refundDate(v){
+ if(v==null||v==='')return '';
+ if(v instanceof Date && !isNaN(v)){return new Date(v.getTime()-v.getTimezoneOffset()*60000).toISOString().slice(0,10);}
+ let m=String(v).trim().match(/(\d{4})[-.\/](\d{1,2})[-.\/](\d{1,2})/);
+ return m?`${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`:'';
+}
+function refundWeekStart(d){let dt=new Date(d+'T00:00:00');if(isNaN(dt))return '';let g=dt.getDay();dt.setDate(dt.getDate()+(g===0?-6:1-g));return dt.toISOString().slice(0,10);}
+function ensureSheetJS(){return new Promise((res,rej)=>{if(window.XLSX)return res();let s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';s.onload=()=>res();s.onerror=()=>rej(new Error('엑셀 라이브러리 로드 실패'));document.head.appendChild(s);});}
+function refundNorm(s){return (s==null?'':String(s)).replace(/\s+/g,'').trim();}
+function refundParseWorkbook(wb){
+ let names=wb.SheetNames;
+ let cand=names.filter(n=>/환불\(20\d\d\)/.test(n)).sort().reverse();
+ let order=[...cand,...names.filter(n=>!cand.includes(n))];
+ for(let nm of order){
+   let ws=wb.Sheets[nm];if(!ws)continue;
+   let aoa=XLSX.utils.sheet_to_json(ws,{header:1,raw:false,dateNF:'yyyy-mm-dd',defval:null});
+   let hi=-1;
+   for(let i=0;i<Math.min(aoa.length,12);i++){
+     let rs=(aoa[i]||[]).map(refundNorm);
+     if(rs.includes('접수일')&&rs.some(c=>c.includes('환불금액'))){hi=i;break;}
+   }
+   if(hi<0)continue;
+   let hdr=(aoa[hi]||[]).map(refundNorm);
+   let col=(nm2)=>hdr.findIndex(h=>h===nm2), colc=(sub)=>hdr.findIndex(h=>h.includes(sub));
+   let iRecv=col('접수일'),iName=col('주문자'),iCourse=col('강의명'),iBook=col('교재'),
+       iPayD=col('결제일'),iPay=col('결제수단'),iSale=col('판매금액'),
+       iRef=(col('총환불금액')>=0?col('총환불금액'):colc('환불금액')),
+       iReason=colc('환불사유'),iNote=col('비고'),iHandler=col('처리자');
+   let out=[];
+   for(let r=hi+1;r<aoa.length;r++){
+     let row=aoa[r]||[];let recv=row[iRecv];
+     if(recv==null||String(recv).trim()==='')continue;
+     let rd=refundDate(recv);if(!rd)continue;
+     out.push({recv_date:rd,orderer_mask:refundMaskName(row[iName]),course:refundStr(row[iCourse]),book:refundStr(row[iBook]),
+       pay_date:refundDate(row[iPayD])||'',pay_method:refundStr(row[iPay]).replace(/\s+/g,''),
+       sale_amount:refundNum(row[iSale]),refund_amount:refundNum(row[iRef]),
+       reason:refundStr(row[iReason]),note:refundStr(row[iNote]),handler:refundStr(row[iHandler])});
+   }
+   if(out.length)return out;
+ }
+ return [];
+}
+async function refundLogSection(tid){
+ let body=document.getElementById('wsBody');body.innerHTML='<div class="muted">불러오는 중…</div>';
+ _refundData=await api('/api/refund-log');
+ renderRefund(tid);
+}
+function refundAgg(records,gran){
+ let map={};
+ records.forEach(r=>{let d=(r.recv_date||'').slice(0,10);if(!d)return;
+   let key=gran==='year'?d.slice(0,4):gran==='month'?d.slice(0,7):refundWeekStart(d);if(!key)return;
+   let m=map[key]||(map[key]={key,count:0,refund:0,sale:0});m.count++;m.refund+=(+r.refund_amount||0);m.sale+=(+r.sale_amount||0);});
+ return Object.values(map).sort((a,b)=>a.key<b.key?-1:1);
+}
+function refundSetGran(g,tid){_refundGran=g;renderRefund(tid);}
+function renderRefund(tid){
+ let body=document.getElementById('wsBody');
+ let d=_refundData||{records:[],upload:null};let recs=d.records||[];
+ let canUpload=(currentUser.team_id===6)||isSuperAdmin()||(currentUser.role==='DIVISION_ADMIN');
+ let totCount=recs.length,totRefund=recs.reduce((s,r)=>s+(+r.refund_amount||0),0),totSale=recs.reduce((s,r)=>s+(+r.sale_amount||0),0);
+ let avg=totCount?totRefund/totCount:0;
+ let agg=refundAgg(recs,_refundGran);let maxR=Math.max(1,...agg.map(a=>a.refund));
+ let bars=agg.map(a=>`<div style="display:flex;align-items:center;gap:8px;margin:3px 0">
+     <div style="width:96px;font-size:12px;color:#555;flex:none">${a.key}</div>
+     <div style="flex:1;background:#eef0f7;border-radius:6px;overflow:hidden"><div style="width:${Math.round(a.refund/maxR*100)}%;background:#6b5cff;height:16px"></div></div>
+     <div style="width:160px;text-align:right;font-size:12px;flex:none">${refundFmtWon(a.refund)} · ${a.count}건</div>
+   </div>`).join('')||'<div class="muted">데이터가 없습니다.</div>';
+ let det=recs.slice().sort((a,b)=>(a.recv_date<b.recv_date?1:-1)).map(r=>`<tr>
+     <td>${esc(r.recv_date||'')}</td><td>${esc(r.orderer_mask||'')}</td>
+     <td style="max-width:220px">${esc(r.course||'')}</td><td>${esc(r.pay_method||'')}</td>
+     <td style="text-align:right">${refundFmtWon(r.sale_amount)}</td><td style="text-align:right">${refundFmtWon(r.refund_amount)}</td>
+     <td style="max-width:200px">${esc(r.reason||'')}</td><td>${esc(r.handler||'')}</td></tr>`).join('');
+ let up=d.upload;
+ body.innerHTML=`
+  <div class="row" style="justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">
+    <div><div class="page-kicker">SERVICE OPS · 취소·환불</div><h3 style="margin:2px 0">취소·환불 내역</h3>
+      <div class="muted">${up?`최근 업로드: ${esc(up.filename||'')} · ${(up.uploaded_at||'').slice(0,10)} · ${up.row_count}건${up.uploaded_by_name?' ('+esc(up.uploaded_by_name)+')':''}`:'아직 등록된 파일이 없습니다.'}</div></div>
+    ${canUpload?`<div class="row" style="gap:6px"><input type="file" id="refundFile" accept=".xlsx,.xls" style="display:none" onchange="refundUpload(this,${tid})"><button class="btn" onclick="document.getElementById('refundFile').click()">엑셀 업로드(전체 교체)</button></div>`:'<span class="pill">읽기 전용</span>'}
+  </div>
+  <div class="section" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+    <div class="card"><div class="muted">총 환불 건수</div><b style="font-size:20px">${totCount.toLocaleString()}건</b></div>
+    <div class="card"><div class="muted">총 환불금액</div><b style="font-size:20px">${refundFmtWon(totRefund)}</b></div>
+    <div class="card"><div class="muted">건당 평균 환불액</div><b style="font-size:20px">${refundFmtWon(avg)}</b></div>
+  </div>
+  <div class="card section">
+    <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+      <div class="page-kicker">기간별 환불 추이 (접수일 기준)</div>
+      <div class="row" style="gap:4px">
+        <button class="btn ${_refundGran==='year'?'':'secondary'}" style="padding:3px 10px" onclick="refundSetGran('year',${tid})">연간</button>
+        <button class="btn ${_refundGran==='month'?'':'secondary'}" style="padding:3px 10px" onclick="refundSetGran('month',${tid})">월간</button>
+        <button class="btn ${_refundGran==='week'?'':'secondary'}" style="padding:3px 10px" onclick="refundSetGran('week',${tid})">주간</button>
+      </div>
+    </div>
+    <div style="margin-top:10px">${bars}</div>
+  </div>
+  <div class="card section" style="overflow-x:auto">
+    <div class="page-kicker" style="margin-bottom:6px">상세 내역 <span class="muted">· 개인정보(주문자·아이디)는 마스킹 처리됩니다</span></div>
+    <table style="min-width:900px"><thead><tr><th>접수일</th><th>주문자</th><th>강의명</th><th>결제수단</th><th>판매금액</th><th>환불금액</th><th>환불사유</th><th>처리자</th></tr></thead>
+    <tbody>${det||'<tr><td colspan="8" class="muted">등록된 내역이 없습니다.</td></tr>'}</tbody></table>
+  </div>`;
+}
+async function refundUpload(input,tid){
+ let f=input.files[0];if(!f)return;
+ if(!confirm('업로드하면 기존 취소·환불 내역이 이 파일 내용으로 전체 교체됩니다. 계속할까요?')){input.value='';return;}
+ try{
+   await ensureSheetJS();toast('엑셀을 읽는 중…');
+   let buf=await f.arrayBuffer();
+   let wb=XLSX.read(new Uint8Array(buf),{type:'array',cellDates:true});
+   let rows=refundParseWorkbook(wb);
+   if(!rows.length){toast('환불 시트를 찾지 못했습니다. (접수일·환불금액 헤더 확인)');input.value='';return;}
+   toast(rows.length+'건 등록 중…');
+   let r=await api('/api/refund-log/replace',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor_id:currentUser.id,filename:f.name,rows})});
+   toast('등록 완료: '+(r.count||rows.length)+'건');input.value='';
+   await refundLogSection(tid);
+ }catch(e){toast('업로드 실패: '+(e.message||e));input.value='';}
 }
 async function openBoard(id){
  if(navContext.workspaceTeamId){return openBoardInWorkspace(navContext.workspaceTeamId,id)}
