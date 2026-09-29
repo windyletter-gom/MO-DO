@@ -701,6 +701,31 @@ def ensure_schema():
             source TEXT DEFAULT 'manual',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+
+        /* ===== 취소·환불 내역 (서비스운영팀이 엑셀로 등록, 전 팀 열람) =====
+           개인정보(주문자/아이디)는 저장하지 않고 마스킹된 이름만 보관한다. */
+        CREATE TABLE IF NOT EXISTS refund_records(
+            id INTEGER PRIMARY KEY,
+            recv_date TEXT,            -- 접수일 YYYY-MM-DD
+            orderer_mask TEXT,         -- 주문자(마스킹)
+            course TEXT,               -- 강의명
+            book TEXT,                 -- 교재
+            pay_date TEXT,             -- 결제일
+            pay_method TEXT,           -- 결제수단
+            sale_amount REAL,          -- 판매금액
+            refund_amount REAL,        -- 총 환불금액
+            reason TEXT,               -- 상세 환불사유
+            note TEXT,                 -- 비고
+            handler TEXT,              -- 처리자
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS refund_uploads(
+            id INTEGER PRIMARY KEY,
+            filename TEXT,
+            row_count INTEGER,
+            uploaded_by INTEGER,
+            uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
         """)
         c.commit()
 
@@ -1665,6 +1690,14 @@ class App(BaseHTTPRequestHandler):
                             out.append(r)
                     return self.send_json({"week_start":week_start,"items":out})
 
+                if p == "/api/refund-log":
+                    # 취소·환불 내역: 전 팀 열람(개인정보는 이미 마스킹되어 저장됨)
+                    recs=[dict(r) for r in c.execute("""SELECT id,recv_date,orderer_mask,course,book,pay_date,pay_method,
+                        sale_amount,refund_amount,reason,note,handler FROM refund_records
+                        ORDER BY recv_date, id""")]
+                    up=c.execute("SELECT ru.*, u.name uploaded_by_name FROM refund_uploads ru LEFT JOIN users u ON ru.uploaded_by=u.id ORDER BY ru.id DESC LIMIT 1").fetchone()
+                    return self.send_json({"records":recs,"upload":(dict(up) if up else None),"count":len(recs)})
+
                 if p == "/api/planning/overview":
                     live_active=c.execute("SELECT COUNT(*) FROM planning_live_events WHERE status NOT IN ('완료','취소')").fetchone()[0]
                     promo_active=c.execute("SELECT COUNT(*) FROM planning_promotions WHERE status NOT IN ('완료','취소')").fetchone()[0]
@@ -2514,6 +2547,34 @@ class App(BaseHTTPRequestHandler):
                          src_id,x.get("actor_id")))
                     c.execute("UPDATE weekly_reports SET carried_over=1 WHERE id=?",(src_id,))
                     c.commit();return self.send_json({"id":cur.lastrowid,"ok":True})
+
+                if p=="/api/refund-log/replace":
+                    # 취소·환불 내역 전체 교체(스냅숏 업로드). 서비스운영팀 또는 관리자만.
+                    actor=c.execute("SELECT * FROM users WHERE id=?",(x.get("actor_id"),)).fetchone()
+                    is_admin=actor and (actor["role"] in ("SUPER_ADMIN","DIVISION_ADMIN") or actor["name"] in ("정해근","이원행"))
+                    if not (actor and (actor["team_id"]==6 or is_admin)):
+                        return self.send_json({"error":"서비스운영팀 또는 관리자만 등록할 수 있습니다."},403)
+                    rows=x.get("rows") or []
+                    def _num(v):
+                        try:
+                            if v is None or v=="":return None
+                            return float(v)
+                        except: return None
+                    tuples=[]
+                    for r in rows:
+                        tuples.append((r.get("recv_date"),r.get("orderer_mask"),r.get("course"),r.get("book"),
+                            r.get("pay_date"),r.get("pay_method"),_num(r.get("sale_amount")),_num(r.get("refund_amount")),
+                            r.get("reason"),r.get("note"),r.get("handler")))
+                    c.execute("DELETE FROM refund_records")
+                    base="INSERT INTO refund_records(recv_date,orderer_mask,course,book,pay_date,pay_method,sale_amount,refund_amount,reason,note,handler) VALUES "
+                    ph="(?,?,?,?,?,?,?,?,?,?,?)"
+                    CH=150   # 원격(libSQL) 안전을 위해 청크 다중행 INSERT
+                    for i in range(0,len(tuples),CH):
+                        chunk=tuples[i:i+CH]
+                        flat=[v for t in chunk for v in t]
+                        c.execute(base+",".join([ph]*len(chunk)),flat)
+                    c.execute("INSERT INTO refund_uploads(filename,row_count,uploaded_by) VALUES(?,?,?)",(x.get("filename",""),len(tuples),x.get("actor_id")))
+                    c.commit();return self.send_json({"ok":True,"count":len(tuples)})
 
                 if p=="/api/planning/live-events":
                     cur=c.execute("""INSERT INTO planning_live_events(event_name,event_type,product_name,owner_id,event_date,registration_count,confirmed_count,paid_conversion_count,satisfaction_score,review_score,status,notes)
