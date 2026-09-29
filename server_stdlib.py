@@ -707,7 +707,9 @@ def ensure_schema():
         CREATE TABLE IF NOT EXISTS refund_records(
             id INTEGER PRIMARY KEY,
             recv_date TEXT,            -- 접수일 YYYY-MM-DD
-            orderer_mask TEXT,         -- 주문자(마스킹)
+            orderer_mask TEXT,         -- 주문자(마스킹, 없으면 빈값)
+            ct TEXT,                   -- 담당 CT/교수 (권한 필터 기준)
+            package TEXT,              -- 패키지분류
             course TEXT,               -- 강의명
             book TEXT,                 -- 교재
             pay_date TEXT,             -- 결제일
@@ -726,6 +728,17 @@ def ensure_schema():
             uploaded_by INTEGER,
             uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+
+        /* ===== 주간 업무보고 수정 이력(변경 전 내용 추적) ===== */
+        CREATE TABLE IF NOT EXISTS weekly_history(
+            id INTEGER PRIMARY KEY,
+            weekly_id INTEGER,
+            editor_id INTEGER,
+            editor_name TEXT,
+            changed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            changes TEXT            -- JSON: [{field,label,old,new}]
+        );
+        CREATE INDEX IF NOT EXISTS idx_weekly_history_wid ON weekly_history(weekly_id);
         """)
         c.commit()
 
@@ -791,6 +804,8 @@ def ensure_user_columns():
             c.execute("ALTER TABLE users ADD COLUMN account_status TEXT DEFAULT 'ACTIVE'")
         if "password_hash" not in cols:
             c.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+        if "can_view_refunds" not in cols:   # 관리자 지정 환불 열람 권한
+            c.execute("ALTER TABLE users ADD COLUMN can_view_refunds INTEGER DEFAULT 0")
         # 비밀번호 미설정 계정은 기본 비밀번호 '1234'로 일원화
         c.execute("UPDATE users SET password_hash=? WHERE password_hash IS NULL OR password_hash=''",(hash_pw('1234'),))
         # 아이디(login_id) 미설정 계정은 이메일 @ 앞부분으로 자동 채움 (이메일/아이디 로그인 지원)
@@ -813,6 +828,15 @@ def ensure_weekly_columns():
             c.commit()
         except Exception as e:
             print("[MIGRATE] weekly_reports:", e)
+        try:
+            rcols={r["name"] for r in c.execute("PRAGMA table_info(refund_records)")}
+            if rcols and "ct" not in rcols:
+                c.execute("ALTER TABLE refund_records ADD COLUMN ct TEXT")
+            if rcols and "package" not in rcols:
+                c.execute("ALTER TABLE refund_records ADD COLUMN package TEXT")
+            c.commit()
+        except Exception as e:
+            print("[MIGRATE] refund_records:", e)
 
 def ensure_planning_columns():
     with db() as c:
@@ -1692,13 +1716,36 @@ class App(BaseHTTPRequestHandler):
                             out.append(r)
                     return self.send_json({"week_start":week_start,"items":out})
 
+                if p.startswith("/api/weekly/") and p.endswith("/history"):
+                    wid=int(p.split("/")[3])
+                    rows=[dict(r) for r in c.execute("SELECT id,editor_id,editor_name,changed_at,changes FROM weekly_history WHERE weekly_id=? ORDER BY id DESC",(wid,))]
+                    for r in rows:
+                        try: r["changes"]=json.loads(r.get("changes") or "[]")
+                        except: r["changes"]=[]
+                    return self.send_json({"items":rows})
+
                 if p == "/api/refund-log":
-                    # 취소·환불 내역: 전 팀 열람(개인정보는 이미 마스킹되어 저장됨)
-                    recs=[dict(r) for r in c.execute("""SELECT id,recv_date,orderer_mask,course,book,pay_date,pay_method,
-                        sale_amount,refund_amount,reason,note,handler FROM refund_records
-                        ORDER BY recv_date, id""")]
+                    # 취소·환불 내역: 열람 권한 = 전체(팀장/이원행/관리자/지정자/서비스운영) / 본인건(MCC 구성원) / 없음
+                    uid=int(one(q.get("user_id"),0) or 0)
+                    u=c.execute("SELECT * FROM users WHERE id=?",(uid,)).fetchone()
+                    def _refacc(u):
+                        if not u: return 'none'
+                        uk=u.keys()
+                        cvr = (u["can_view_refunds"]==1) if "can_view_refunds" in uk else False
+                        if u["is_team_leader"]==1 or u["name"]=="이원행" or u["role"] in ("SUPER_ADMIN","DIVISION_ADMIN") or cvr or u["team_id"]==6:
+                            return 'all'
+                        if u["team_id"]==1: return 'own'   # MCC 구성원
+                        return 'none'
+                    access=_refacc(u)
+                    recs=[dict(r) for r in c.execute("""SELECT id,recv_date,orderer_mask,ct,package,course,book,pay_date,pay_method,
+                        sale_amount,refund_amount,reason,note,handler FROM refund_records ORDER BY recv_date, id""")]
+                    if access=='own':
+                        nm=(u["name"] or "").strip()
+                        recs=[r for r in recs if nm and nm in (r.get("ct") or "")]
+                    elif access=='none':
+                        recs=[]
                     up=c.execute("SELECT ru.*, u.name uploaded_by_name FROM refund_uploads ru LEFT JOIN users u ON ru.uploaded_by=u.id ORDER BY ru.id DESC LIMIT 1").fetchone()
-                    return self.send_json({"records":recs,"upload":(dict(up) if up else None),"count":len(recs)})
+                    return self.send_json({"records":recs,"upload":(dict(up) if up else None),"count":len(recs),"access":access})
 
                 if p == "/api/planning/overview":
                     live_active=c.execute("SELECT COUNT(*) FROM planning_live_events WHERE status NOT IN ('완료','취소')").fetchone()[0]
@@ -2576,12 +2623,12 @@ class App(BaseHTTPRequestHandler):
                         except: return None
                     tuples=[]
                     for r in rows:
-                        tuples.append((r.get("recv_date"),r.get("orderer_mask"),r.get("course"),r.get("book"),
+                        tuples.append((r.get("recv_date"),r.get("orderer_mask"),r.get("ct"),r.get("package"),r.get("course"),r.get("book"),
                             r.get("pay_date"),r.get("pay_method"),_num(r.get("sale_amount")),_num(r.get("refund_amount")),
                             r.get("reason"),r.get("note"),r.get("handler")))
                     c.execute("DELETE FROM refund_records")
-                    base="INSERT INTO refund_records(recv_date,orderer_mask,course,book,pay_date,pay_method,sale_amount,refund_amount,reason,note,handler) VALUES "
-                    ph="(?,?,?,?,?,?,?,?,?,?,?)"
+                    base="INSERT INTO refund_records(recv_date,orderer_mask,ct,package,course,book,pay_date,pay_method,sale_amount,refund_amount,reason,note,handler) VALUES "
+                    ph="(?,?,?,?,?,?,?,?,?,?,?,?,?)"
                     CH=150   # 원격(libSQL) 안전을 위해 청크 다중행 INSERT
                     for i in range(0,len(tuples),CH):
                         chunk=tuples[i:i+CH]
@@ -2901,10 +2948,25 @@ class App(BaseHTTPRequestHandler):
                         fields+=["deliverable_file=?","deliverable_original=?","deliverable_mime=?"]
                         args+=[stored,x.get("deliverable_name"),x.get("deliverable_mime") or "application/octet-stream"]
                     if not fields: return self.send_json({"error":"변경할 항목이 없습니다."},400)
+                    # 변경 이력(수정 전 내용) 계산
+                    _labels={"title":"업무명","detail":"업무내용","start_date":"시작일정","complete_date":"완료일정","status":"상태","target_rate":"목표달성률","actual_rate":"실제달성률","deliverable":"최종산출물","collaborators":"협업인원"}
+                    _changes=[]
+                    for k,lab in _labels.items():
+                        if k not in x: continue
+                        oldv=item[k] if k in item.keys() else None
+                        newv=x[k]
+                        if k=="actual_rate" and _force_actual: newv=100
+                        os_=("" if oldv is None else str(oldv).strip())
+                        ns_=("" if newv is None else str(newv).strip())
+                        if os_!=ns_:
+                            _changes.append({"field":k,"label":lab,"old":os_,"new":ns_})
                     # 누가 수정했는지 기록(최종 수정자/일시)
                     fields.append("updated_by=?"); args.append(actor["id"] if actor else x.get("actor_id"))
                     fields.append("updated_at=CURRENT_TIMESTAMP"); args.append(wid)
                     c.execute(f"UPDATE weekly_reports SET {','.join(fields)} WHERE id=?",args)
+                    if _changes:
+                        c.execute("INSERT INTO weekly_history(weekly_id,editor_id,editor_name,changes) VALUES(?,?,?,?)",
+                            (wid,(actor["id"] if actor else x.get("actor_id")),(actor["name"] if actor else ""),json.dumps(_changes,ensure_ascii=False)))
                     c.commit();return self.send_json({"ok":True})
 
                 if p.startswith("/api/requests/") and p.count("/")==3 and p.rsplit("/",1)[1].isdigit():
@@ -3105,7 +3167,7 @@ class App(BaseHTTPRequestHandler):
                         return self.send_json({"error":"관리자만 구성원 정보를 수정할 수 있습니다."},403)
                     old=c.execute("SELECT * FROM users WHERE id=?",(uid,)).fetchone()
                     if not old:return self.send_json({"error":"not found"},404)
-                    fields=["name","rank","job_title","extension","email","team_id","active","role","is_team_leader","login_id","phone","account_status"]
+                    fields=["name","rank","job_title","extension","email","team_id","active","role","is_team_leader","login_id","phone","account_status","can_view_refunds"]
                     vals={k:x[k] for k in fields if k in x}
                     if vals:
                         sql=",".join(f"{k}=?" for k in vals)

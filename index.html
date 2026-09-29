@@ -508,6 +508,7 @@ async function reopenWorkspaceSection(tid,code){
  if(tid===3){
    common.splice(2,0,['PLAN_OVERVIEW','기획 통합현황'],['PLAN_LIVE','라이브특강'],['PLAN_PROMO','프로모션·이벤트'],['PLAN_PRODUCT','상품·가격 관리'],['PLAN_B2B','B2B 판매 관리'],['PLAN_SITE','사이트 운영']);
  }
+ if(refundAccess()==='none') common=common.filter(m=>m[0]!=='CXREFUND');
  view.innerHTML=`<div class="workspace-shell"><aside class="workspace-menu"><h3 style="padding:6px 8px">${w.team.name}</h3>${common.map(m=>`<button class="${m[0]===code?'active':''}" onclick="workspaceSection(${tid},'${m[0]}',this)">${m[1]}</button>`).join('')}</aside><section id="wsBody"></section></div>`;
  let btn=[...document.querySelectorAll('.workspace-menu button')].find(b=>b.getAttribute('onclick')?.includes(`'${code}'`));
  await workspaceSection(tid,code,btn);
@@ -1341,6 +1342,7 @@ async function openWorkspace(tid){
  if(tid===3){
    common.splice(2,0,['PLAN_OVERVIEW','기획 통합현황'],['PLAN_LIVE','라이브특강'],['PLAN_PROMO','프로모션·이벤트'],['PLAN_PRODUCT','상품·가격 관리'],['PLAN_B2B','B2B 판매 관리'],['PLAN_SITE','사이트 운영']);
  }
+ if(refundAccess()==='none') common=common.filter(m=>m[0]!=='CXREFUND');
  view.innerHTML=`<div class="workspace-shell"><aside class="workspace-menu"><h3 style="padding:6px 8px">${w.team.name}</h3>${common.map((m,i)=>`<button class="${i===0?'active':''}" onclick="workspaceSection(${tid},'${m[0]}',this)">${m[1]}</button>`).join('')}</aside><section id="wsBody"></section></div>`;
  workspaceSection(tid,'OVERVIEW',document.querySelector('.workspace-menu button'));
 }
@@ -1442,8 +1444,12 @@ function refundNum(v){if(v==null||v==='')return null;let n=parseFloat(String(v).
 function refundDate(v){
  if(v==null||v==='')return '';
  if(v instanceof Date && !isNaN(v)){return new Date(v.getTime()-v.getTimezoneOffset()*60000).toISOString().slice(0,10);}
- let m=String(v).trim().match(/(\d{4})[-.\/](\d{1,2})[-.\/](\d{1,2})/);
- return m?`${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`:'';
+ let s=String(v).trim();
+ let m=s.match(/(\d{4})[-.\/](\d{1,2})[-.\/](\d{1,2})/);          // YYYY-MM-DD
+ if(m)return `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;
+ let m2=s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/);    // M/D/YY 또는 M/D/YYYY
+ if(m2){let y=+m2[3];if(y<100)y+=2000;return `${y}-${String(m2[1]).padStart(2,'0')}-${String(m2[2]).padStart(2,'0')}`;}
+ return '';
 }
 function refundWeekStart(d){let dt=new Date(d+'T00:00:00');if(isNaN(dt))return '';let g=dt.getDay();dt.setDate(dt.getDate()+(g===0?-6:1-g));return dt.toISOString().slice(0,10);}
 function ensureSheetJS(){return new Promise((res,rej)=>{if(window.XLSX)return res();let s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';s.onload=()=>res();s.onerror=()=>rej(new Error('엑셀 라이브러리 로드 실패'));document.head.appendChild(s);});}
@@ -1454,7 +1460,7 @@ function refundParseWorkbook(wb){
  let order=[...cand,...names.filter(n=>!cand.includes(n))];
  for(let nm of order){
    let ws=wb.Sheets[nm];if(!ws)continue;
-   let aoa=XLSX.utils.sheet_to_json(ws,{header:1,raw:false,dateNF:'yyyy-mm-dd',defval:null});
+   let aoa=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:null});
    let hi=-1;
    for(let i=0;i<Math.min(aoa.length,12);i++){
      let rs=(aoa[i]||[]).map(refundNorm);
@@ -1463,7 +1469,7 @@ function refundParseWorkbook(wb){
    if(hi<0)continue;
    let hdr=(aoa[hi]||[]).map(refundNorm);
    let col=(nm2)=>hdr.findIndex(h=>h===nm2), colc=(sub)=>hdr.findIndex(h=>h.includes(sub));
-   let iRecv=col('접수일'),iName=col('주문자'),iCourse=col('강의명'),iBook=col('교재'),
+   let iRecv=col('접수일'),iName=col('주문자'),iCT=(colc('CT')>=0?colc('CT'):colc('교수')),iPkg=colc('패키지'),iCourse=col('강의명'),iBook=col('교재'),
        iPayD=col('결제일'),iPay=col('결제수단'),iSale=col('판매금액'),
        iRef=(col('총환불금액')>=0?col('총환불금액'):colc('환불금액')),
        iReason=colc('환불사유'),iNote=col('비고'),iHandler=col('처리자');
@@ -1472,7 +1478,7 @@ function refundParseWorkbook(wb){
      let row=aoa[r]||[];let recv=row[iRecv];
      if(recv==null||String(recv).trim()==='')continue;
      let rd=refundDate(recv);if(!rd)continue;
-     out.push({recv_date:rd,orderer_mask:refundMaskName(row[iName]),course:refundStr(row[iCourse]),book:refundStr(row[iBook]),
+     out.push({recv_date:rd,orderer_mask:refundMaskName(row[iName]),ct:refundStr(row[iCT]),package:refundStr(row[iPkg]),course:refundStr(row[iCourse]),book:refundStr(row[iBook]),
        pay_date:refundDate(row[iPayD])||'',pay_method:refundStr(row[iPay]).replace(/\s+/g,''),
        sale_amount:refundNum(row[iSale]),refund_amount:refundNum(row[iRef]),
        reason:refundStr(row[iReason]),note:refundStr(row[iNote]),handler:refundStr(row[iHandler])});
@@ -1481,9 +1487,15 @@ function refundParseWorkbook(wb){
  }
  return [];
 }
+/* 환불 열람 권한: 전체(팀장/이원행/관리자/지정자/서비스운영) / 본인담당(MCC 구성원) / 없음 */
+function refundAccess(u){u=u||currentUser;if(!u)return 'none';
+ if(u.is_team_leader==1||u.name==='이원행'||['SUPER_ADMIN','DIVISION_ADMIN'].includes(u.role)||u.can_view_refunds==1||u.team_id===6)return 'all';
+ if(u.team_id===1)return 'own';
+ return 'none';}
 async function refundLogSection(tid){
  let body=document.getElementById('wsBody');body.innerHTML='<div class="muted">불러오는 중…</div>';
- _refundData=await api('/api/refund-log');
+ _refundData=await api('/api/refund-log?user_id='+currentUser.id);
+ if(_refundData&&_refundData.access==='none'){body.innerHTML='<div class="card section"><b>취소·환불 내역</b><div class="muted" style="margin-top:6px">이 내역을 열람할 권한이 없습니다. 관리자에게 문의하세요.</div></div>';return;}
  renderRefund(tid);
 }
 function refundAgg(records,gran){
@@ -1558,10 +1570,10 @@ function renderRefund(tid){
  window._refundCourseArr=courseArr;
  let courseRows=courseArr.map((cs,i)=>`<tr onclick="refundSetCourseIdx(${i},${tid})" style="cursor:pointer;${cs.course===_refundCourse?'background:#f0eeff':''}"><td style="max-width:300px">${esc(cs.course)}</td><td style="text-align:right">${cs.count}건</td><td style="text-align:right">${refundFmtWon(cs.refund)}</td></tr>`).join('')||'<tr><td colspan="3" class="muted">데이터가 없습니다.</td></tr>';
  let det=filtered.slice().sort((a,b)=>(a.recv_date<b.recv_date?1:-1)).map(r=>`<tr>
-     <td>${esc(r.recv_date||'')}</td><td>${esc(r.orderer_mask||'')}</td>
+     <td>${esc(r.recv_date||'')}</td><td>${esc(r.ct||r.orderer_mask||'')}</td><td>${esc(r.package||'')}</td>
      <td style="max-width:220px">${esc(r.course||'')}</td><td>${esc(r.pay_method||'')}</td>
      <td style="text-align:right">${refundFmtWon(r.sale_amount)}</td><td style="text-align:right">${refundFmtWon(r.refund_amount)}</td>
-     <td style="max-width:200px">${esc(r.reason||'')}</td><td>${esc(r.handler||'')}</td></tr>`).join('');
+     <td style="max-width:220px">${esc(r.reason||'')}</td></tr>`).join('');
  let up=d.upload;
  let gbtn=(g,lab)=>`<button class="btn ${_refundGran===g?'':'secondary'}" style="padding:3px 10px" onclick="refundSetGran('${g}',${tid})">${lab}</button>`;
  let periodSel=_refundGran==='all'?'':`<select onchange="refundSetPeriod(this.value,${tid})" style="width:auto;padding:3px 6px"><option value="">전체</option>${refundPeriodsFor(_refundGran).map(k=>`<option value="${k}" ${k===_refundPeriod?'selected':''}>${k}</option>`).join('')}</select>`;
@@ -1602,8 +1614,8 @@ function renderRefund(tid){
     </div>
   </div>
   <div class="card section" style="overflow-x:auto">
-    <div class="page-kicker" style="margin-bottom:6px">상세 내역 <span class="muted">· ${esc(periodLabel)}${_refundCourse?' · '+esc(_refundCourse):''} · ${filtered.length}건 · 개인정보 마스킹</span></div>
-    <table style="min-width:900px"><thead><tr><th>접수일</th><th>주문자</th><th>강의명</th><th>결제수단</th><th>판매금액</th><th>환불금액</th><th>환불사유</th><th>처리자</th></tr></thead>
+    <div class="page-kicker" style="margin-bottom:6px">상세 내역 <span class="muted">· ${esc(periodLabel)}${_refundCourse?' · '+esc(_refundCourse):''} · ${filtered.length}건${_refundData&&_refundData.access==='own'?' · 본인 담당 건만 표시':''}</span></div>
+    <table style="min-width:900px"><thead><tr><th>접수일</th><th>담당 CT/교수</th><th>패키지분류</th><th>강의명</th><th>결제수단</th><th>판매금액</th><th>환불금액</th><th>환불사유</th></tr></thead>
     <tbody>${det||'<tr><td colspan="8" class="muted">해당 조건의 내역이 없습니다.</td></tr>'}</tbody></table>
   </div>`;
 }
@@ -1716,11 +1728,11 @@ function adminUserCreateModal(){
 async function saveAdminUser(){await api('/api/admin/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor_id:currentUser.id,name:au_name.value,login_id:au_login.value,team_id:+au_team.value,rank:au_rank.value,job_title:au_job.value,phone:au_phone.value,extension:au_ext.value,email:au_email.value,role:au_role.value,is_team_leader:au_role.value==='TEAM_LEADER'})});[users,teams]=await Promise.all([api('/api/users'),api('/api/teams')]);closeModal();adminCenter('ORG')}
 function adminUserEditModal(uid){
  let u=_adminData.users.find(x=>x.id===uid);if(!u)return;
- showModal('조직원 계정 및 권한',`<label>이름</label><input id="ae_name" value="${esc(u.name||'')}"><div class="two"><div><label>로그인 아이디</label><input id="ae_login" value="${esc(u.login_id||'')}"></div><div><label>소속팀</label><select id="ae_team"><option value="">총괄</option>${teams.map(t=>`<option value="${t.id}" ${u.team_id===t.id?'selected':''}>${t.name}</option>`)}</select></div></div><div class="two"><div><label>직급</label><input id="ae_rank" value="${esc(u.rank||'')}"></div><div><label>직책</label><input id="ae_job" value="${esc(u.job_title||'')}"></div></div><div class="two"><div><label>휴대전화</label><input id="ae_phone" value="${esc(u.phone||'')}"></div><div><label>내선</label><input id="ae_ext" value="${esc(u.extension||'')}"></div></div><label>이메일</label><input id="ae_email" value="${esc(u.email||'')}"><div class="two"><div><label>권한</label><select id="ae_role">${[['MEMBER','일반 사용자'],['TEAM_LEADER','팀장'],['DIVISION_ADMIN','부서 관리자'],['SUPER_ADMIN','시스템 관리자']].map(x=>`<option value="${x[0]}" ${u.role===x[0]?'selected':''}>${x[1]}</option>`).join('')}</select></div><div><label>계정 상태</label><select id="ae_status"><option value="ACTIVE" ${u.active!==0?'selected':''}>사용 중</option><option value="LEAVE">휴직</option><option value="LOCKED">잠금</option><option value="RETIRED" ${u.active===0?'selected':''}>퇴사</option></select></div></div><div class="card"><b>퇴사 처리 기준</b><div class="muted">팀 구성과 신규 담당자 선택에서는 제외하되 기존 업무·프로젝트·댓글·승인·히스토리는 유지합니다.</div></div><button class="btn" onclick="saveAdminUserEdit(${uid})">저장</button>`);
+ showModal('조직원 계정 및 권한',`<label>이름</label><input id="ae_name" value="${esc(u.name||'')}"><div class="two"><div><label>로그인 아이디</label><input id="ae_login" value="${esc(u.login_id||'')}"></div><div><label>소속팀</label><select id="ae_team"><option value="">총괄</option>${teams.map(t=>`<option value="${t.id}" ${u.team_id===t.id?'selected':''}>${t.name}</option>`)}</select></div></div><div class="two"><div><label>직급</label><input id="ae_rank" value="${esc(u.rank||'')}"></div><div><label>직책</label><input id="ae_job" value="${esc(u.job_title||'')}"></div></div><div class="two"><div><label>휴대전화</label><input id="ae_phone" value="${esc(u.phone||'')}"></div><div><label>내선</label><input id="ae_ext" value="${esc(u.extension||'')}"></div></div><label>이메일</label><input id="ae_email" value="${esc(u.email||'')}"><div class="two"><div><label>권한</label><select id="ae_role">${[['MEMBER','일반 사용자'],['TEAM_LEADER','팀장'],['DIVISION_ADMIN','부서 관리자'],['SUPER_ADMIN','시스템 관리자']].map(x=>`<option value="${x[0]}" ${u.role===x[0]?'selected':''}>${x[1]}</option>`).join('')}</select></div><div><label>계정 상태</label><select id="ae_status"><option value="ACTIVE" ${u.active!==0?'selected':''}>사용 중</option><option value="LEAVE">휴직</option><option value="LOCKED">잠금</option><option value="RETIRED" ${u.active===0?'selected':''}>퇴사</option></select></div></div><div class="card"><b>퇴사 처리 기준</b><div class="muted">팀 구성과 신규 담당자 선택에서는 제외하되 기존 업무·프로젝트·댓글·승인·히스토리는 유지합니다.</div></div><label class="row" style="gap:8px;margin-top:10px;padding:8px 10px;border:1px solid var(--line);border-radius:8px"><input type="checkbox" id="ae_refund" ${u.can_view_refunds==1?'checked':''} style="width:auto"> <b>취소·환불 내역 전체 열람 권한 부여</b> <span class="muted">(팀장·이원행 이사 외 지정)</span></label><button class="btn" onclick="saveAdminUserEdit(${uid})">저장</button>`);
 }
 async function saveAdminUserEdit(uid){
  let status=ae_status.value,active=status==='RETIRED'?0:1;
- await api('/api/users/'+uid,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor_id:currentUser.id,name:ae_name.value,login_id:ae_login.value,team_id:ae_team.value?+ae_team.value:null,rank:ae_rank.value,job_title:ae_job.value,phone:ae_phone.value,extension:ae_ext.value,email:ae_email.value,role:ae_role.value,is_team_leader:ae_role.value==='TEAM_LEADER'?1:0,account_status:status,active})});
+ await api('/api/users/'+uid,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor_id:currentUser.id,name:ae_name.value,login_id:ae_login.value,team_id:ae_team.value?+ae_team.value:null,rank:ae_rank.value,job_title:ae_job.value,phone:ae_phone.value,extension:ae_ext.value,email:ae_email.value,role:ae_role.value,is_team_leader:ae_role.value==='TEAM_LEADER'?1:0,account_status:status,active,can_view_refunds:(document.getElementById('ae_refund')&&ae_refund.checked)?1:0})});
  [users,teams]=await Promise.all([api('/api/users'),api('/api/teams')]);closeModal();adminCenter('ORG');
 }
 
@@ -1944,10 +1956,10 @@ async function weeklyReport(){
      let deliv=(it.deliverable_file?`<a href="/uploads/weekly/${it.id}/${encodeURIComponent(it.deliverable_file)}" target="_blank">📎 ${esc(it.deliverable_original||'파일')}</a><br>`:'')+esc(it.deliverable||'');
      let actions=can?`<div class="row" style="gap:4px;flex-wrap:wrap"><button class="btn secondary" style="padding:2px 6px" onclick="wkItemModal(${m.id},${it.id})">수정</button>${it.carried_over?'<span class="pill">이월됨</span>':`<button class="btn secondary" style="padding:2px 6px" onclick="wkCarry(${it.id})">차주 이월</button>`}<button class="btn secondary" style="padding:2px 6px;color:#c0392b;border-color:#e6b8b2" onclick="wkDelete(${it.id})">삭제</button></div>`:'';
      return `<tr>${i===0?`<td rowspan="${its.length}" style="vertical-align:top"><b>${esc(m.name)}</b><div class="muted" style="font-size:11px">${m.rank||''}</div>${can?`<div style="margin-top:6px">${addBtn}</div>`:''}</td>`:''}
-       <td><b>${esc(it.title||'')}</b>${it.carried_from?' <span class="pill" style="background:#eef;color:#66c">이월</span>':''}${it.promoted_task_id?' <span class="pill" style="background:#e7f6ee;color:#177a4a">관리 업무</span>':''}${it.updated_by_name?`<div class="muted" style="font-size:10px;margin-top:2px">최종수정: ${esc(it.updated_by_name)} · ${(it.updated_at||'').slice(0,10)}</div>`:''}</td>
+       <td><b>${esc(it.title||'')}</b>${it.carried_from?' <span class="pill" style="background:#eef;color:#66c">이월</span>':''}${it.promoted_task_id?' <span class="pill" style="background:#e7f6ee;color:#177a4a">관리 업무</span>':''}${it.updated_by_name?`<div class="muted" style="font-size:10px;margin-top:2px">최종수정: ${esc(it.updated_by_name)} · ${wkFmtDT(it.updated_at)} <a href="javascript:void(0)" onclick="wkShowHistory(${it.id})" style="color:#6b5cff">수정 전 보기</a></div>`:''}</td>
        <td style="max-width:220px">${esc(it.detail||'')}</td>
        ${isMCC?`<td>${it.start_date?it.start_date:'-'}</td>`:''}
-       <td>${it.complete_date?it.complete_date:'-'}<div>${wkStatusPill(it.status)}</div></td>
+       <td>${it.complete_date?it.complete_date:'-'}<div style="margin-top:3px">${can?`<select onchange="wkQuickStatus(${it.id},this.value)" style="padding:2px 4px;font-size:12px;border-radius:6px"><option ${it.status==='미완료'?'selected':''}>미완료</option><option ${it.status==='진행중'?'selected':''}>진행중</option><option ${it.status==='완료'?'selected':''}>완료</option></select>`:wkStatusPill(it.status)}</div></td>
        <td>${rate}</td>
        <td style="max-width:180px">${deliv||'-'}</td>
        <td style="max-width:150px">${esc(wkCollabDisplay(it))}</td>
@@ -2073,6 +2085,23 @@ function wkConfirmCollab(){
  let p=document.getElementById('wkCollabPop');if(p)p.remove();
 }
 function wkStatusAuto(){let s=document.getElementById('wk_status'),a=document.getElementById('wk_actual');if(s&&a&&s.value==='완료'){a.value=100;}}
+/* UTC 타임스탬프 → 로컬(한국) 'YYYY-MM-DD HH:MM' */
+function wkFmtDT(ts){if(!ts)return '';try{let d=new Date(String(ts).replace(' ','T')+'Z');if(isNaN(d))return String(ts).slice(0,16);let p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;}catch(e){return String(ts).slice(0,16);}}
+/* 리스트에서 상태만 즉시 변경(구글시트식) */
+async function wkQuickStatus(id,status){
+ try{await api('/api/weekly/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor_id:currentUser.id,status})});toast('상태를 변경했습니다.');weeklyReport();}
+ catch(e){toast('변경 실패: '+(e.message||e));}
+}
+/* 수정 전 내용(변경 이력) 보기 */
+async function wkShowHistory(id){
+ let data;try{data=await api('/api/weekly/'+id+'/history');}catch(e){toast('이력을 불러오지 못했습니다.');return;}
+ let items=(data&&data.items)||[];
+ let html=items.length?items.map(h=>`<div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:8px">
+    <div class="muted" style="font-size:12px">${wkFmtDT(h.changed_at)} · ${esc(h.editor_name||'')} 님 수정</div>
+    ${(h.changes||[]).map(cg=>`<div style="font-size:13px;margin-top:5px"><b>${esc(cg.label)}</b><div style="margin-top:2px"><span style="background:#fde8e8;color:#a33;padding:1px 5px;border-radius:3px;text-decoration:line-through">${esc(cg.old||'(빈값)')}</span> <span style="color:#888">→</span> <span style="background:#e7f6ee;color:#177a4a;padding:1px 5px;border-radius:3px">${esc(cg.new||'(빈값)')}</span></div></div>`).join('')}
+  </div>`).join(''):'<div class="muted">수정 이력이 없습니다.</div>';
+ showModal('수정 이력 · 변경 전 내용',`<div style="max-height:60vh;overflow:auto">${html}</div><div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn secondary" onclick="closeModal()">닫기</button></div>`);
+}
 async function saveWkItem(uid,itemId){
  let mon=new Date(window._wkMonday),sun=new Date(mon);sun.setDate(mon.getDate()+6);
  let title=document.getElementById('wk_title').value.trim();
