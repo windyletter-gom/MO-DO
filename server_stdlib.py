@@ -808,6 +808,8 @@ def ensure_weekly_columns():
                 c.execute("ALTER TABLE weekly_reports ADD COLUMN start_date TEXT")
             if cols and "updated_by" not in cols:       # 최종 수정자(누가 수정했는지)
                 c.execute("ALTER TABLE weekly_reports ADD COLUMN updated_by INTEGER")
+            if cols and "promoted_task_id" not in cols:  # 관리 업무로 승격된 경우 연결된 task id
+                c.execute("ALTER TABLE weekly_reports ADD COLUMN promoted_task_id INTEGER")
             c.commit()
         except Exception as e:
             print("[MIGRATE] weekly_reports:", e)
@@ -2547,6 +2549,18 @@ class App(BaseHTTPRequestHandler):
                          src_id,x.get("actor_id")))
                     c.execute("UPDATE weekly_reports SET carried_over=1 WHERE id=?",(src_id,))
                     c.commit();return self.send_json({"id":cur.lastrowid,"ok":True})
+
+                if p.startswith("/api/weekly/") and p.endswith("/promote"):
+                    # 주간보고 업무를 관리 업무(task)로 승격 연결
+                    wid=int(p.split("/")[3])
+                    item=c.execute("SELECT * FROM weekly_reports WHERE id=?",(wid,)).fetchone()
+                    if not item: return self.send_json({"error":"항목을 찾을 수 없습니다."},404)
+                    actor=c.execute("SELECT * FROM users WHERE id=?",(x.get("actor_id"),)).fetchone()
+                    is_admin=actor and (actor["role"] in ("SUPER_ADMIN","DIVISION_ADMIN") or actor["is_team_leader"] or actor["name"] in ("정해근","이원행"))
+                    if not (actor and (actor["id"]==item["user_id"] or is_admin)):
+                        return self.send_json({"error":"본인 또는 팀장/관리자만 승격할 수 있습니다."},403)
+                    c.execute("UPDATE weekly_reports SET promoted_task_id=? WHERE id=?",(x.get("task_id"),wid))
+                    c.commit();return self.send_json({"ok":True,"promoted_task_id":x.get("task_id")})
 
                 if p=="/api/refund-log/replace":
                     # 취소·환불 내역 전체 교체(스냅숏 업로드). 서비스운영팀 또는 관리자만.
