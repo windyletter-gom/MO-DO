@@ -165,6 +165,14 @@ def _libsql_connect():
         con=_libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
     else:
         con=_libsql.connect(str(DB))
+    # libSQL(Turso)은 외래키 검사가 켜져 있으면 같은 트랜잭션 내 연속 INSERT에서
+    # 방금 넣은 부모 행을 못 찾아 'FOREIGN KEY constraint failed'가 나는 경우가 있다.
+    # 앱은 SQLite(무결성은 코드로 관리)에서 개발됐으므로 연결 시 외래키 검사를 꺼서
+    # 업무 등록 등 삽입 계열 오류를 근본적으로 방지한다.
+    try:
+        con.execute("PRAGMA foreign_keys=OFF")
+    except Exception as _e:
+        print("[DB] libSQL FK off 설정 실패(무시):", _e)
     return _Conn(con)
 
 def db():
@@ -771,6 +779,10 @@ def ensure_weekly_columns():
             cols={r["name"] for r in c.execute("PRAGMA table_info(weekly_reports)")}
             if cols and "collaborator_teams" not in cols:
                 c.execute("ALTER TABLE weekly_reports ADD COLUMN collaborator_teams TEXT")
+            if cols and "start_date" not in cols:      # MCC 시작일정
+                c.execute("ALTER TABLE weekly_reports ADD COLUMN start_date TEXT")
+            if cols and "updated_by" not in cols:       # 최종 수정자(누가 수정했는지)
+                c.execute("ALTER TABLE weekly_reports ADD COLUMN updated_by INTEGER")
             c.commit()
         except Exception as e:
             print("[MIGRATE] weekly_reports:", e)
@@ -1617,8 +1629,9 @@ class App(BaseHTTPRequestHandler):
                     week_start=one(q.get("week_start"),"")
                     where=["wr.week_start=?"]; args=[week_start]
                     if team_id: where.append("wr.team_id=?"); args.append(team_id)
-                    rows=[dict(r) for r in c.execute(f"""SELECT wr.*, u.name user_name, u.rank user_rank, t.name team_name
+                    rows=[dict(r) for r in c.execute(f"""SELECT wr.*, u.name user_name, u.rank user_rank, t.name team_name, uu.name updated_by_name
                         FROM weekly_reports wr LEFT JOIN users u ON wr.user_id=u.id LEFT JOIN teams t ON wr.team_id=t.id
+                        LEFT JOIN users uu ON wr.updated_by=uu.id
                         WHERE {' AND '.join(where)} ORDER BY wr.user_id, wr.sort_order, wr.id""",args)]
                     for r in rows:
                         try: r["collaborator_ids"]=json.loads(r.get("collaborator_ids") or "[]")
@@ -1632,6 +1645,25 @@ class App(BaseHTTPRequestHandler):
                     team=c.execute("SELECT id,name FROM teams WHERE id=?",(team_id,)).fetchone() if team_id else None
                     return self.send_json({"week_start":week_start,"week_end":one(q.get("week_end"),""),
                         "team":dict(team) if team else None,"members":members,"items":rows})
+
+                if p == "/api/weekly-referenced":
+                    # 내가 협업 인원으로 지정된(참조된) 업무: 개인 지정 + 내 팀이 팀단위로 지정된 것
+                    uid=int(one(q.get("user_id"),0) or 0)
+                    my_team=int(one(q.get("team_id"),0) or 0)
+                    week_start=one(q.get("week_start"),"")
+                    allrows=[dict(r) for r in c.execute("""SELECT wr.*, u.name user_name, u.rank user_rank, t.name team_name
+                        FROM weekly_reports wr LEFT JOIN users u ON wr.user_id=u.id LEFT JOIN teams t ON wr.team_id=t.id
+                        WHERE wr.week_start=? ORDER BY wr.team_id, wr.user_id, wr.sort_order, wr.id""",(week_start,))]
+                    out=[]
+                    for r in allrows:
+                        try: cids=json.loads(r.get("collaborator_ids") or "[]")
+                        except: cids=[]
+                        try: cteams=json.loads(r.get("collaborator_teams") or "[]")
+                        except: cteams=[]
+                        if (uid and uid in cids) or (my_team and my_team in cteams):
+                            r["collaborator_ids"]=cids; r["collaborator_teams"]=cteams
+                            out.append(r)
+                    return self.send_json({"week_start":week_start,"items":out})
 
                 if p == "/api/planning/overview":
                     live_active=c.execute("SELECT COUNT(*) FROM planning_live_events WHERE status NOT IN ('완료','취소')").fetchone()[0]
@@ -2430,15 +2462,24 @@ class App(BaseHTTPRequestHandler):
                         stored=f"{int(time.time())}_{safe}"
                         store_upload(f"weekly/{item_id}/{stored}", raw, mime)
                         return stored,orig,(mime or "application/octet-stream")
+                    # 권한: 본인 업무만 등록 가능(팀장·최고관리자는 예외)
+                    actor=c.execute("SELECT * FROM users WHERE id=?",(x.get("actor_id") or x.get("created_by"),)).fetchone()
+                    tgt_uid=x.get("user_id")
+                    is_admin=actor and (actor["role"] in ("SUPER_ADMIN","DIVISION_ADMIN") or actor["is_team_leader"] or actor["name"] in ("정해근","이원행"))
+                    if not (actor and (actor["id"]==tgt_uid or is_admin)):
+                        return self.send_json({"error":"본인 또는 팀장/관리자만 업무를 추가할 수 있습니다."},403)
                     collabs=x.get("collaborator_ids") or []
                     collab_teams=x.get("collaborator_teams") or []
-                    cur=c.execute("""INSERT INTO weekly_reports(week_start,week_end,team_id,user_id,title,detail,complete_date,status,
+                    _status=x.get("status","미완료")
+                    _actual=(int(x["actual_rate"]) if str(x.get("actual_rate","")).strip()!="" else None)
+                    if _status=="완료": _actual=100   # 완료 처리 시 실제 달성률 자동 100%
+                    cur=c.execute("""INSERT INTO weekly_reports(week_start,week_end,team_id,user_id,title,detail,start_date,complete_date,status,
                         target_rate,actual_rate,deliverable,collaborators,collaborator_ids,collaborator_teams,sort_order,created_by)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (x["week_start"],x.get("week_end",""),x.get("team_id"),x.get("user_id"),x.get("title",""),x.get("detail",""),
-                         x.get("complete_date"),x.get("status","미완료"),
+                         x.get("start_date"),x.get("complete_date"),_status,
                          (int(x["target_rate"]) if str(x.get("target_rate","")).strip()!="" else None),
-                         (int(x["actual_rate"]) if str(x.get("actual_rate","")).strip()!="" else None),
+                         _actual,
                          x.get("deliverable",""),x.get("collaborators",""),json.dumps(collabs,ensure_ascii=False),
                          json.dumps(collab_teams,ensure_ascii=False),
                          int(x.get("sort_order") or 0),x.get("created_by")))
@@ -2452,6 +2493,11 @@ class App(BaseHTTPRequestHandler):
                     src_id=int(p.split("/")[3])
                     src=c.execute("SELECT * FROM weekly_reports WHERE id=?",(src_id,)).fetchone()
                     if not src: return self.send_json({"error":"원본을 찾을 수 없습니다."},404)
+                    # 권한: 본인 업무만 이월 가능(팀장·최고관리자는 예외)
+                    actor=c.execute("SELECT * FROM users WHERE id=?",(x.get("actor_id"),)).fetchone()
+                    is_admin=actor and (actor["role"] in ("SUPER_ADMIN","DIVISION_ADMIN") or actor["is_team_leader"] or actor["name"] in ("정해근","이원행"))
+                    if not (actor and (actor["id"]==src["user_id"] or is_admin)):
+                        return self.send_json({"error":"본인 또는 팀장/관리자만 이월할 수 있습니다."},403)
                     from datetime import datetime,timedelta
                     ws=datetime.strptime(src["week_start"],"%Y-%m-%d")+timedelta(days=7)
                     we=datetime.strptime(src["week_end"],"%Y-%m-%d")+timedelta(days=7) if src["week_end"] else ws+timedelta(days=6)
@@ -2459,11 +2505,12 @@ class App(BaseHTTPRequestHandler):
                     dup=c.execute("SELECT id FROM weekly_reports WHERE carried_from=?",(src_id,)).fetchone()
                     if dup:
                         return self.send_json({"error":"이미 차주로 이월된 업무입니다.","id":dup["id"]},409)
-                    cur=c.execute("""INSERT INTO weekly_reports(week_start,week_end,team_id,user_id,title,detail,complete_date,status,
-                        target_rate,actual_rate,deliverable,collaborators,collaborator_ids,carried_from,created_by)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    cur=c.execute("""INSERT INTO weekly_reports(week_start,week_end,team_id,user_id,title,detail,start_date,complete_date,status,
+                        target_rate,actual_rate,deliverable,collaborators,collaborator_ids,collaborator_teams,carried_from,created_by)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (ws.strftime("%Y-%m-%d"),we.strftime("%Y-%m-%d"),src["team_id"],src["user_id"],src["title"],src["detail"],
-                         None,"미완료",src["target_rate"],None,src["deliverable"],src["collaborators"],src["collaborator_ids"],
+                         None,None,"미완료",src["target_rate"],None,src["deliverable"],src["collaborators"],src["collaborator_ids"],
+                         (src["collaborator_teams"] if "collaborator_teams" in src.keys() else None),
                          src_id,x.get("actor_id")))
                     c.execute("UPDATE weekly_reports SET carried_over=1 WHERE id=?",(src_id,))
                     c.commit();return self.send_json({"id":cur.lastrowid,"ok":True})
@@ -2757,11 +2804,16 @@ class App(BaseHTTPRequestHandler):
                     if not (actor and (actor["id"]==item["user_id"] or is_admin)):
                         return self.send_json({"error":"본인 또는 팀장/관리자만 수정할 수 있습니다."},403)
                     fields=[]; args=[]
-                    for k in ("title","detail","complete_date","status","deliverable","collaborators"):
+                    for k in ("title","detail","start_date","complete_date","status","deliverable","collaborators"):
                         if k in x: fields.append(f"{k}=?"); args.append(x[k])
+                    _force_actual = (x.get("status")=="완료")   # 완료 처리 시 실제 달성률 자동 100%
                     for k in ("target_rate","actual_rate"):
                         if k in x:
-                            v=x[k]; fields.append(f"{k}=?"); args.append(int(v) if str(v).strip()!="" else None)
+                            v=x[k]
+                            if k=="actual_rate" and _force_actual: v=100
+                            fields.append(f"{k}=?"); args.append(int(v) if str(v).strip()!="" else None)
+                    if _force_actual and "actual_rate" not in x:
+                        fields.append("actual_rate=?"); args.append(100)
                     if "collaborator_ids" in x:
                         fields.append("collaborator_ids=?"); args.append(json.dumps(x["collaborator_ids"] or [],ensure_ascii=False))
                     if "collaborator_teams" in x:
@@ -2774,6 +2826,8 @@ class App(BaseHTTPRequestHandler):
                         fields+=["deliverable_file=?","deliverable_original=?","deliverable_mime=?"]
                         args+=[stored,x.get("deliverable_name"),x.get("deliverable_mime") or "application/octet-stream"]
                     if not fields: return self.send_json({"error":"변경할 항목이 없습니다."},400)
+                    # 누가 수정했는지 기록(최종 수정자/일시)
+                    fields.append("updated_by=?"); args.append(actor["id"] if actor else x.get("actor_id"))
                     fields.append("updated_at=CURRENT_TIMESTAMP"); args.append(wid)
                     c.execute(f"UPDATE weekly_reports SET {','.join(fields)} WHERE id=?",args)
                     c.commit();return self.send_json({"ok":True})
