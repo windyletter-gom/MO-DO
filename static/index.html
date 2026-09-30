@@ -524,7 +524,7 @@ async function home(){
    api('/api/dashboard?user_id='+currentUser.id),
    api('/api/requests?user_id='+currentUser.id+'&direction=incoming'),
    api('/api/requests?user_id='+currentUser.id+'&direction=outgoing'),
-   api('/api/tasks?viewer_id='+currentUser.id),
+   api('/api/work-management?viewer_id='+currentUser.id+'&scope=mine'),
    api('/api/blocked-priority?viewer_id='+currentUser.id),
    api('/api/urgent-priority?viewer_id='+currentUser.id),
    api('/api/projects?viewer_id='+currentUser.id),
@@ -684,7 +684,7 @@ function flowStep(title,count,pct,status=''){return `<div class="flow-step ${sta
 async function updateSidebarBadges(){
  try{
   let [tasks,projectsNow,notifs,events]=await Promise.all([
-   api('/api/tasks?viewer_id='+currentUser.id),
+   api('/api/work-management?viewer_id='+currentUser.id+'&scope=mine'),
    api('/api/projects?viewer_id='+currentUser.id),
    api('/api/notifications?user_id='+currentUser.id),
    api('/api/calendar?viewer_id='+currentUser.id+'&month='+new Date().toISOString().slice(0,7))
@@ -705,7 +705,7 @@ async function updateSidebarBadges(){
 function setNavBadge(id,n){let el=document.getElementById(id);if(!el)return;el.textContent=n||'';el.classList.toggle('show',!!n)}
 async function showHomeTasks(type){
  // 진행 처리 현황 카드 숫자와 동일한 기준으로 필터(카드 숫자 = 클릭 목록 건수 일치)
- let tasks=await api('/api/tasks?viewer_id='+currentUser.id);
+ let tasks=await api('/api/work-management?viewer_id='+currentUser.id+'&scope=mine');
  let list=Array.isArray(tasks)?tasks:[],title='업무 목록';
  if(type==='TODO'){list=list.filter(t=>t.status==='TODO');title='대기'}
  else if(type==='IN_PROGRESS'){list=list.filter(t=>t.status==='IN_PROGRESS'||t.status==='BLOCKED');title='진행 중'}
