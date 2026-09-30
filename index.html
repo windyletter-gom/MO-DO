@@ -508,7 +508,7 @@ async function reopenWorkspaceSection(tid,code){
  if(tid===3){
    common.splice(2,0,['PLAN_OVERVIEW','기획 통합현황'],['PLAN_LIVE','라이브특강'],['PLAN_PROMO','프로모션·이벤트'],['PLAN_PRODUCT','상품·가격 관리'],['PLAN_B2B','B2B 판매 관리'],['PLAN_SITE','사이트 운영']);
  }
- if(refundAccess()==='none') common=common.filter(m=>m[0]!=='CXREFUND');
+ if(refundAccess()!=='all') common=common.filter(m=>m[0]!=='CXREFUND'); // 현재는 전체 열람 권한자만 메뉴 노출(본인담당 조회 기능은 유지, 메뉴만 숨김)
  view.innerHTML=`<div class="workspace-shell"><aside class="workspace-menu"><h3 style="padding:6px 8px">${w.team.name}</h3>${common.map(m=>`<button class="${m[0]===code?'active':''}" onclick="workspaceSection(${tid},'${m[0]}',this)">${m[1]}</button>`).join('')}</aside><section id="wsBody"></section></div>`;
  let btn=[...document.querySelectorAll('.workspace-menu button')].find(b=>b.getAttribute('onclick')?.includes(`'${code}'`));
  await workspaceSection(tid,code,btn);
@@ -1342,7 +1342,7 @@ async function openWorkspace(tid){
  if(tid===3){
    common.splice(2,0,['PLAN_OVERVIEW','기획 통합현황'],['PLAN_LIVE','라이브특강'],['PLAN_PROMO','프로모션·이벤트'],['PLAN_PRODUCT','상품·가격 관리'],['PLAN_B2B','B2B 판매 관리'],['PLAN_SITE','사이트 운영']);
  }
- if(refundAccess()==='none') common=common.filter(m=>m[0]!=='CXREFUND');
+ if(refundAccess()!=='all') common=common.filter(m=>m[0]!=='CXREFUND'); // 현재는 전체 열람 권한자만 메뉴 노출(본인담당 조회 기능은 유지, 메뉴만 숨김)
  view.innerHTML=`<div class="workspace-shell"><aside class="workspace-menu"><h3 style="padding:6px 8px">${w.team.name}</h3>${common.map((m,i)=>`<button class="${i===0?'active':''}" onclick="workspaceSection(${tid},'${m[0]}',this)">${m[1]}</button>`).join('')}</aside><section id="wsBody"></section></div>`;
  workspaceSection(tid,'OVERVIEW',document.querySelector('.workspace-menu button'));
 }
