@@ -102,6 +102,8 @@ th{color:var(--ink2);font-weight:500}td.n{text-align:right;font-variant-numeric:
 </div>
 
 <div id="main">
+<div class="panel empty" id="empty" hidden></div>
+<div id="data">
 <div class="grid two">
   <section class="panel">
     <h2>시기 지도</h2>
@@ -128,6 +130,7 @@ th{color:var(--ink2);font-weight:500}td.n{text-align:right;font-variant-numeric:
   <p class="hint">선택한 도서의 수집 행입니다(최근 60건).</p>
   <div class="tbl"><table><thead id="raw-head"></thead><tbody id="raw"></tbody></table></div>
 </section>
+</div>
 </div>
 
 <section class="panel" style="margin-top:14px">
@@ -158,7 +161,10 @@ async function api(path,opt){const r=await fetch(path,opt);const j=await r.json(
 async function load(){
   STATUS=await api('/api/bookstore/status');renderStatus();renderLog();
   const [o,s]=await Promise.all([api('/api/bookstore/orders'),api('/api/bookstore/sales')]);
-  ORDERS=o.rows;SALES=s.rows;render();
+  ORDERS=o.rows;SALES=s.rows;
+  if(!rowsForMetric().length){const first=['kyobo','aladin_sales','aladin'].find(m=>{S.metric=m;return rowsForMetric().length});S.metric=first||'kyobo';
+    document.querySelectorAll('#metric button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.v===S.metric))}
+  render();
 }
 function rowsForMetric(){
   if(S.metric==='kyobo')return ORDERS.filter(r=>r.shop==='kyobo').map(r=>({date:r.order_date,isbn:r.isbn,title:r.title,ch:r.store,qty:r.qty,price:r.price,rate:r.supply_rate,vendor:r.vendor,flag:r.flag}));
@@ -188,9 +194,9 @@ function render(){
   const rows=all.filter(r=>r.date>=W.fromStr);
   const books={};rows.forEach(r=>{const b=books[r.isbn]||(books[r.isbn]={isbn:r.isbn,title:r.title,total:0,series:Array(W.weeks).fill(0)});b.total+=r.qty;const i=wkIdx(r.date,W.start);if(i>=0&&i<W.weeks)b.series[i]+=r.qty});
   const list=Object.values(books).sort((a,b)=>b.total-a.total);
-  const main=document.getElementById('main');
-  if(!list.length){main.innerHTML=`<div class="panel empty">${S.metric==='yes24'?'YES24는 아직 연동되지 않았습니다.':'이 기간에 수집된 데이터가 없습니다. 아래에서 수집을 실행하거나 기간을 넓혀 보세요.'}</div>`;main.dataset.empty='1';return}
-  if(main.dataset.empty){location.reload();return}
+  const emp=document.getElementById('empty'),dat=document.getElementById('data');
+  if(!list.length){emp.hidden=false;dat.hidden=true;emp.textContent=S.metric==='yes24'?'YES24는 아직 연동되지 않았습니다.':(all.length?'선택한 기간에 데이터가 없습니다. 기간을 넓혀 보세요.':'아직 수집된 데이터가 없습니다. 아래 "수집 관리"에서 수집을 실행해 주세요.');return}
+  emp.hidden=true;dat.hidden=false;
   if(!S.sel||!books[S.sel])S.sel=list[0].isbn;
   drawHeat(list.slice(0,12),W);drawRank(list);drawDetail(rows.filter(r=>r.isbn===S.sel),books[S.sel],W);drawRaw(rows.filter(r=>r.isbn===S.sel));
 }
@@ -266,7 +272,7 @@ document.getElementById('bf-run').addEventListener('click',()=>{const f=document
 document.getElementById('period').addEventListener('change',e=>{S.period=+e.target.value;render()});
 [['metric','metric'],['unit','unit']].forEach(([id,key])=>document.getElementById(id).querySelectorAll('button').forEach(btn=>btn.addEventListener('click',()=>{S[key]=btn.dataset.v;S.sel=null;btn.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',b===btn));render()})));
 (()=>{const t=new Date(),f=new Date();f.setMonth(f.getMonth()-1);document.getElementById('bf-to').value=ymd(new Date(t-MS));document.getElementById('bf-from').value=ymd(f)})();
-load().catch(e=>{document.getElementById('main').innerHTML=`<div class="panel empty">불러오기 실패: ${esc(e.message)}</div>`});
+load().catch(e=>{const emp=document.getElementById('empty');emp.hidden=false;document.getElementById('data').hidden=true;emp.textContent='불러오기 실패: '+e.message});
 </script>
 </body>
 </html>
