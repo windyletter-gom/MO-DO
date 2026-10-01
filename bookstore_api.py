@@ -13,11 +13,13 @@ MO-DO 서점 발주·판매 API (server_stdlib.py 에서 import)
   GET  /api/bookstore/sales?from=&to=                 알라딘 실제 판매 행 (일 단위)
   POST /api/bookstore/collect            {actor_id, shop:"kyobo"|"aladin"}            즉시 수집 (관리자/서비스운영)
   POST /api/bookstore/collect/aladin-sales {actor_id, from, to}                        알라딘 판매 백필
+  GET  /api/bookstore/competitors?keyword=&days=    경쟁사 스냅숏 (출판사별 일별 판매지수 합 + 최신일 상위 목록)
+  POST /api/bookstore/collect/competitors {actor_id}  알라딘 TTB 검색 스냅숏 즉시 수집
   POST /api/bookstore/collect/yes24      {actor_id} → needs_code / {actor_id, code}    YES24 2단계 (어댑터 완성 후)
 
 자동 수집: 환경변수 MODO_BOOKSTORE_AUTOCOLLECT=1 이면 매일 MODO_BOOKSTORE_HOUR(기본 5, KST)시에
 교보 발주(최근 7일) + 알라딘 당일 발주 + 알라딘 전일 판매를 백그라운드 스레드로 수집한다.
-자격증명 환경변수: KYOBO_SCM_ID/PW, ALADIN_SCM_ID/PW (Render → Environment 에 등록)
+자격증명 환경변수: KYOBO_SCM_ID/PW, ALADIN_SCM_ID/PW, ALADIN_TTB_KEY (경쟁사), COMP_KEYWORDS (선택)
 """
 from __future__ import annotations
 
@@ -28,6 +30,7 @@ import traceback
 from datetime import date, datetime, timedelta, timezone
 
 import scm_collect as sc
+import competitor_collect as cc
 
 KST = timezone(timedelta(hours=9))
 _lock = threading.Lock()          # 수집 동시 실행 방지
@@ -37,6 +40,7 @@ _lock = threading.Lock()          # 수집 동시 실행 방지
 def ensure_schema(db):
     with db() as c:
         c.executescript(sc.SCHEMA)
+        c.executescript(cc.SCHEMA)
 
 
 # ------------------------------------------------------------------ 권한
@@ -74,6 +78,28 @@ def handle_get(h, c, p: str, q: dict) -> bool:
         rows = [dict(r) for r in c.execute(sql + " ORDER BY order_date, shop, isbn", args)]
         h.send_json({"rows": rows, "count": len(rows)}); return True
 
+    if p == "/api/bookstore/competitors":
+        kw, days = one("keyword"), int(one("days", "90") or 90)
+        kws = [r["keyword"] for r in c.execute("SELECT DISTINCT keyword FROM comp_snapshot ORDER BY keyword")]
+        if not kws:
+            h.send_json({"keywords": [], "has_key": bool(os.environ.get("ALADIN_TTB_KEY")), "series": [], "latest": [], "latest_date": None}); return True
+        kw = kw if kw in kws else kws[0]
+        since = str(date.today() - timedelta(days=days))
+        series = [dict(r) for r in c.execute(
+            "SELECT snap_date, pub_group, SUM(sales_point) sp, COUNT(*) n FROM comp_snapshot "
+            "WHERE keyword=? AND snap_date>=? GROUP BY snap_date, pub_group ORDER BY snap_date", (kw, since))]
+        ld = c.execute("SELECT MAX(snap_date) d FROM comp_snapshot WHERE keyword=?", (kw,)).fetchone()["d"]
+        prev = c.execute("SELECT MAX(snap_date) d FROM comp_snapshot WHERE keyword=? AND snap_date<?", (kw, ld)).fetchone()["d"]
+        latest = [dict(r) for r in c.execute(
+            "SELECT rank, isbn, title, publisher, pub_group, sales_point, price, best_rank, link FROM comp_snapshot "
+            "WHERE keyword=? AND snap_date=? ORDER BY rank LIMIT 30", (kw, ld))]
+        if prev:
+            pr = {r["isbn"]: r["rank"] for r in c.execute("SELECT isbn, rank FROM comp_snapshot WHERE keyword=? AND snap_date=?", (kw, prev))}
+            for r in latest:
+                r["prev_rank"] = pr.get(r["isbn"])
+        h.send_json({"keywords": kws, "keyword": kw, "has_key": bool(os.environ.get("ALADIN_TTB_KEY")),
+                     "series": series, "latest": latest, "latest_date": ld, "prev_date": prev}); return True
+
     if p == "/api/bookstore/sales":
         f, t = one("from", "2000-01-01"), one("to", "2999-12-31")
         rows = [dict(r) for r in c.execute(
@@ -109,6 +135,9 @@ def handle_post(h, c, p: str, x: dict) -> bool:
                 h.send_json({"error": "한 번에 최대 400일까지"}, 400); return True
             h.send_json(sc.collect_aladin_sales(c, f, t)); return True
 
+        if p == "/api/bookstore/collect/competitors":
+            h.send_json(cc.collect(c)); return True
+
         if p == "/api/bookstore/collect/yes24":
             code = (x.get("code") or "").strip()
             if code and sc.PENDING_YES24.get("adapter"):
@@ -133,6 +162,8 @@ def _run_daily(db):
             r = sc.collect(c, "aladin"); print("[BOOKSTORE] aladin", r, flush=True)
             y = date.today() - timedelta(days=1)
             print("[BOOKSTORE] aladin_sales", sc.collect_aladin_sales(c, y, y), flush=True)
+            if os.environ.get("ALADIN_TTB_KEY"):
+                print("[BOOKSTORE] competitors", cc.collect(c), flush=True)
 
 
 def start_scheduler(db):
