@@ -66,6 +66,23 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--green);outline
 .tbl{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:12.5px;min-width:600px}
 th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);white-space:nowrap}
 th{color:var(--ink2);font-weight:500}td.n{text-align:right;font-variant-numeric:tabular-nums}
+
+/* competitors */
+.comp-head{display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;align-items:flex-start}
+.comp-grid{display:grid;gap:16px;grid-template-columns:1fr;margin-top:12px;align-items:start}
+@media(min-width:900px){.comp-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+.lines svg{width:100%;height:auto;display:block}.lines text{font-family:inherit;font-size:11px;fill:var(--ink2)}
+.lines path{fill:none;stroke-width:1.8}.lines path.moa{stroke-width:3}.lines .axis{stroke:var(--line)}
+.pub-legend{display:flex;flex-wrap:wrap;gap:5px 12px;font-size:12px;color:var(--ink2);margin-top:8px}
+.pub-legend span::before{content:"";display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:5px;vertical-align:3px;background:var(--c)}
+.pub-legend span.moa{color:var(--ink);font-weight:600}.pub-legend span.moa::before{height:5px}
+.best{list-style:none;margin:0;padding:0;font-size:12.5px;max-height:520px;overflow-y:auto}
+.best li{display:grid;grid-template-columns:26px minmax(0,1fr) 70px 54px;gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--line)}
+.best li:first-child{border-top:0}.best li.moa{background:var(--green-soft);margin:0 -10px;padding-left:10px;padding-right:10px;border-radius:6px}
+.best .r{color:var(--ink2);text-align:right}.best .t{min-width:0;line-height:1.3}.best .t a{color:inherit;text-decoration:none}
+.best .t em{font-style:normal;display:block;font-size:11px;color:var(--ink2)}.best .t em b{font-weight:500;color:var(--c)}
+.best .sp{text-align:right;font-variant-numeric:tabular-nums;font-weight:500}.best .dl{text-align:right;font-size:11.5px;font-variant-numeric:tabular-nums}
+.up{color:var(--green)}.dn{color:var(--red)}.nw{color:var(--amber)}
 .empty{padding:28px;text-align:center;color:var(--ink2)}
 .collect{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
 .log{font-size:12px;color:var(--ink2);margin-top:8px;max-height:140px;overflow-y:auto}
@@ -133,12 +150,28 @@ th{color:var(--ink2);font-weight:500}td.n{text-align:right;font-variant-numeric:
 </div>
 </div>
 
+
+<section class="panel" style="margin-top:14px" id="comp">
+  <div class="comp-head">
+    <div>
+      <h2>경쟁사 판매현황</h2>
+      <p class="hint" style="margin-bottom:0">알라딘 검색 결과(시험명)에서 판매지수 순 상위 100권을 매일 저장합니다. 판매지수는 알라딘 기준이며 출판사 간 상대 비교용입니다. 자료 제공: 알라딘</p>
+    </div>
+    <div class="controls" style="margin:0">
+      <label>시험</label><select id="c-kw"></select>
+      <label>기간</label><select id="c-days"><option value="30">30일</option><option value="90" selected>90일</option><option value="180">180일</option><option value="365">1년</option></select>
+    </div>
+  </div>
+  <div id="c-body"></div>
+</section>
+
 <section class="panel" style="margin-top:14px">
   <h2>수집 관리</h2>
   <p class="hint">관리자·서비스운영팀만 실행할 수 있습니다. 자동 수집은 서버 환경변수로 켭니다(매일 새벽).</p>
   <div class="collect">
     <button class="btn secondary" data-collect="kyobo">교보 지금 수집</button>
     <button class="btn secondary" data-collect="aladin">알라딘 지금 수집</button>
+    <button class="btn secondary" data-collect="competitors">경쟁사 지금 수집</button>
     <span style="color:var(--line)">|</span>
     <label>알라딘 판매 백필</label>
     <input type="date" id="bf-from"> ~ <input type="date" id="bf-to">
@@ -262,8 +295,8 @@ function renderLog(){
 async function runCollect(body,btn){
   const m=document.getElementById('c-msg');m.className='msg';m.textContent='수집 중… (서점 응답에 따라 수십 초 걸릴 수 있습니다)';
   document.querySelectorAll('.collect button').forEach(b=>b.disabled=true);
-  try{const r=await api('/api/bookstore/collect'+(body.from?'/aladin-sales':''),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor_id:USER_ID,...body})});
-    if(r.ok===false)throw new Error(r.error||'실패');m.className='msg ok';m.textContent=`완료: ${num(r.rows)}행${r.sales?` + 판매 ${num(r.sales.rows)}행`:''}`;await load()}
+  try{const r=await api('/api/bookstore/collect'+(body.from?'/aladin-sales':body.shop==='competitors'?'/competitors':''),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor_id:USER_ID,...body})});
+    if(r.ok===false)throw new Error(r.error||'실패');m.className='msg ok';m.textContent=`완료: ${num(r.rows)}행${r.sales?` + 판매 ${num(r.sales.rows)}행`:''}${r.errors&&r.errors.length?' (일부 오류: '+r.errors.join('; ')+')':''}`;await load();loadComp()}
   catch(e){m.className='msg err';m.textContent=e.message}
   finally{document.querySelectorAll('.collect button').forEach(b=>b.disabled=false)}
 }
@@ -271,7 +304,40 @@ document.querySelectorAll('[data-collect]').forEach(b=>b.addEventListener('click
 document.getElementById('bf-run').addEventListener('click',()=>{const f=document.getElementById('bf-from').value,t=document.getElementById('bf-to').value;if(!f||!t)return;runCollect({from:f,to:t})});
 document.getElementById('period').addEventListener('change',e=>{S.period=+e.target.value;render()});
 [['metric','metric'],['unit','unit']].forEach(([id,key])=>document.getElementById(id).querySelectorAll('button').forEach(btn=>btn.addEventListener('click',()=>{S[key]=btn.dataset.v;S.sel=null;btn.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',b===btn));render()})));
+
+// ---------- 경쟁사
+const CS={kw:'',days:90};
+const PUBC={'모아':'#0F7B47','에듀윌':'#2B63C6','해커스':'#C2453A','시대에듀':'#8A3FA8','배울학':'#C7801A','에듀피디':'#2A9D8F','엔지니어랩':'#7A6C5D','공단기':'#E07AA8','자단기':'#6B8E23','성안당':'#4A5568','예문사':'#B08968','한솔아카데미':'#5B8DEF','구민사':'#9C6644','동일출판사':'#3D405B','기타':'#BBBBBB'};
+async function loadComp(){
+  const body=document.getElementById('c-body');
+  let d;try{d=await api('/api/bookstore/competitors?keyword='+encodeURIComponent(CS.kw)+'&days='+CS.days)}catch(e){body.innerHTML=`<div class="empty">불러오기 실패: ${esc(e.message)}</div>`;return}
+  const sel=document.getElementById('c-kw');
+  if(sel.options.length!==d.keywords.length){sel.innerHTML=d.keywords.map(k=>`<option ${k===d.keyword?'selected':''}>${esc(k)}</option>`).join('')}
+  if(!d.keywords.length){body.innerHTML=`<div class="empty">${d.has_key?'아직 수집된 스냅숏이 없습니다. 아래 "경쟁사 지금 수집"을 눌러주세요.':'서버에 ALADIN_TTB_KEY 환경변수가 없습니다. 알라딘 TTB 키를 등록하면 활성화됩니다.'}</div>`;return}
+  CS.kw=d.keyword;
+  // 시리즈: 날짜 × 출판사
+  const dates=[...new Set(d.series.map(r=>r.snap_date))].sort(),pubs={};
+  d.series.forEach(r=>{(pubs[r.pub_group]=pubs[r.pub_group]||{})[r.snap_date]=r.sp});
+  const order=Object.keys(pubs).filter(p=>p!=='기타').sort((a,b)=>(pubs[b][dates[dates.length-1]]||0)-(pubs[a][dates[dates.length-1]]||0));
+  const W=1000,H=240,px=46,base=H-24,mx=Math.max(1,...order.map(p=>Math.max(...dates.map(dt=>pubs[p][dt]||0))));
+  const xs=i=>dates.length>1?px+i*(W-px-8)/(dates.length-1):W/2,ys=v=>base-(v/mx)*(base-16);
+  let svg=`<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg"><line class="axis" x1="${px}" y1="${base}" x2="${W}" y2="${base}"/><text x="${px-6}" y="18" text-anchor="end">${num(mx)}</text>`;
+  [...order].reverse().forEach(p=>{const pts=dates.map((dt,i)=>`${i?'L':'M'}${xs(i)},${ys(pubs[p][dt]||0)}`).join(' ');
+    svg+=dates.length>1?`<path class="${p==='모아'?'moa':''}" stroke="${PUBC[p]||'#999'}" d="${pts}"/>`:`<circle cx="${xs(0)}" cy="${ys(pubs[p][dates[0]]||0)}" r="${p==='모아'?6:4}" fill="${PUBC[p]||'#999'}"/>`});
+  const step=Math.max(1,Math.ceil(dates.length/8));dates.forEach((dt,i)=>{if(i%step===0||i===dates.length-1)svg+=`<text x="${xs(i)}" y="${H-6}" text-anchor="middle">${dt.slice(5)}</text>`});
+  svg+='</svg>';
+  const legend=order.map(p=>`<span class="${p==='모아'?'moa':''}" style="--c:${PUBC[p]||'#999'}">${esc(p)}</span>`).join('');
+  const last=dates[dates.length-1],tot=order.reduce((a,p)=>a+(pubs[p][last]||0),0),moa=pubs['모아']?pubs['모아'][last]||0:0,rank=order.indexOf('모아')+1;
+  const list=d.latest.map(b=>{const dl=b.prev_rank==null?(d.prev_date?'<span class="nw">NEW</span>':''):b.prev_rank>b.rank?`<span class="up">▲${b.prev_rank-b.rank}</span>`:b.prev_rank<b.rank?`<span class="dn">▼${b.rank-b.prev_rank}</span>`:'<span style="color:var(--ink2)">–</span>';
+    return `<li class="${b.pub_group==='모아'?'moa':''}"><span class="r">${b.rank}</span><span class="t" style="--c:${PUBC[b.pub_group]||'#999'}"><a href="${esc(b.link)}" target="_blank" rel="noopener">${esc(b.title)}</a><em><b>${esc(b.pub_group)}</b> · ${esc(b.publisher)}${b.best_rank?` · 분야 ${b.best_rank}위`:''}</em></span><span class="sp">${num(b.sales_point)}</span><span class="dl">${dl}</span></li>`}).join('');
+  body.innerHTML=`<div class="comp-grid"><div><p class="hint" style="margin:0 0 6px">출판사별 판매지수 합계 · 일별 (${esc(d.keyword)} 상위 100권 기준)</p><div class="lines">${svg}</div><div class="pub-legend">${legend}</div></div>
+  <div><p class="hint" style="margin:0 0 6px">${d.latest_date} 기준 상위 30 · 판매지수 · ${d.prev_date?'전회('+d.prev_date+') 대비':'첫 수집'}</p><ol class="best">${list}</ol></div></div>
+  <div class="insight" style="border-left-color:var(--green);background:var(--green-soft)">${esc(d.keyword)} 검색 결과에서 모아는 판매지수 기준 <b>${rank||'순위권 밖'}${rank?'위':''}</b>(점유 ${tot?Math.round(moa/tot*100):0}%)이고, 1위 ${esc(order[0]||'-')} 대비 <b>${order[0]&&pubs[order[0]][last]?Math.round(moa/pubs[order[0]][last]*100):0}%</b> 수준입니다. 상위 30 안에 모아 교재 <b>${d.latest.filter(b=>b.pub_group==='모아').length}권</b>.</div>`;
+}
+document.getElementById('c-kw').addEventListener('change',e=>{CS.kw=e.target.value;loadComp()});
+document.getElementById('c-days').addEventListener('change',e=>{CS.days=+e.target.value;loadComp()});
 (()=>{const t=new Date(),f=new Date();f.setMonth(f.getMonth()-1);document.getElementById('bf-to').value=ymd(new Date(t-MS));document.getElementById('bf-from').value=ymd(f)})();
+loadComp();
 load().catch(e=>{const emp=document.getElementById('empty');emp.hidden=false;document.getElementById('data').hidden=true;emp.textContent='불러오기 실패: '+e.message});
 </script>
 </body>
