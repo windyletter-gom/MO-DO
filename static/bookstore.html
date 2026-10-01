@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>서점 발주·판매 · 모아교육그룹</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root{
+  --bg:#F5F7F4; --panel:#FFFFFF; --ink:#19261F; --ink2:#5C6B63; --line:#DCE3DD;
+  --green:#0F7B47; --green-soft:#E3F1E8; --amber:#C7801A; --amber-soft:#FBEFD9; --plum:#8A3FA8; --red:#C2453A;
+  --heat0:#EEF3EF; --heat1:#C9E3D3; --heat2:#8FC6A6; --heat3:#4FA176; --heat4:#0F7B47;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"IBM Plex Sans KR",-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;font-size:14px;line-height:1.55}
+.wrap{max-width:1180px;margin:0 auto;padding:18px 16px 50px}
+header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:14px}
+h1{font-size:22px;font-weight:700;margin:0 0 2px;letter-spacing:-.01em}
+.sub{color:var(--ink2);margin:0;font-size:13px}
+.status{display:flex;flex-wrap:wrap;gap:6px;font-size:12px}
+.status span{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:4px 10px;color:var(--ink2)}
+.status span b{color:var(--ink);font-weight:500}
+.status span.warn{border-color:var(--amber);color:var(--amber)}
+.controls{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;align-items:center}
+.controls label{font-size:12px;color:var(--ink2)}
+select,input{font:inherit;font-size:13px;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:7px 9px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel)}
+.seg button{font:inherit;font-size:13px;padding:7px 12px;border:0;background:transparent;color:var(--ink2);cursor:pointer}
+.seg button[aria-pressed=true]{background:var(--green);color:#fff}
+.seg button:disabled{opacity:.35;cursor:not-allowed}
+.btn{font:inherit;font-size:13px;padding:7px 12px;border:1px solid var(--green);background:var(--green);color:#fff;border-radius:8px;cursor:pointer}
+.btn.secondary{background:var(--panel);color:var(--ink)}
+.btn:disabled{opacity:.5;cursor:wait}
+button:focus-visible,select:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+.panel h2{font-size:15px;font-weight:600;margin:0 0 3px}
+.panel .hint{font-size:12px;color:var(--ink2);margin:0 0 12px}
+.grid{display:grid;gap:14px;grid-template-columns:1fr;align-items:start}
+@media(min-width:900px){.grid.two{grid-template-columns:minmax(0,11fr) minmax(0,9fr)}}
+.heat{overflow-x:auto}.heat svg{display:block;height:auto}
+.heat text{font-family:inherit;fill:var(--ink2);font-size:11px}
+.heat .cell{stroke:var(--panel);stroke-width:2;cursor:pointer}.heat .cell:hover{stroke:var(--ink)}
+.legend{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--ink2);margin-top:8px;justify-content:flex-end}
+.legend span{width:13px;height:13px;border-radius:3px;display:inline-block}
+.rank{list-style:none;margin:0;padding:0;max-height:560px;overflow-y:auto}
+.rank li{display:grid;grid-template-columns:22px minmax(0,1fr) 84px 64px;gap:8px;align-items:center;padding:8px 0;border-top:1px solid var(--line);cursor:pointer}
+.rank li:first-child{border-top:0}
+.rank li.on{background:var(--green-soft);margin:0 -10px;padding-left:10px;padding-right:10px;border-radius:8px}
+.rank .no{color:var(--ink2);font-size:12px;text-align:right}
+.rank .name{font-weight:500;font-size:13px;line-height:1.3;min-width:0}
+.rank .isbn{display:block;color:var(--ink2);font-size:11px;font-weight:400}
+.rank .qty{text-align:right;font-weight:600;font-variant-numeric:tabular-nums}
+.rank .qty small{display:block;font-weight:400;color:var(--ink2);font-size:11px}
+.spark{width:84px;height:26px}.spark path{fill:none;stroke:var(--green);stroke-width:1.6}
+.detail-head{display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;align-items:baseline}
+.detail-head b{font-size:16px}
+.kv{display:flex;flex-wrap:wrap;gap:16px;margin:8px 0 14px}
+.kv div{font-size:12px;color:var(--ink2)}
+.kv div strong{display:block;color:var(--ink);font-size:18px;font-weight:600;font-variant-numeric:tabular-nums}
+.bars svg{width:100%;height:auto;display:block}
+.bars text{font-family:inherit;font-size:11px;fill:var(--ink2)}
+.bars .c0{fill:var(--green)}.bars .c1{fill:var(--heat2)}.bars .c2{fill:var(--plum)}.bars .peak{fill:var(--amber)}.bars .axis{stroke:var(--line)}
+.insight{margin-top:12px;padding:10px 12px;border-left:3px solid var(--amber);background:var(--amber-soft);border-radius:0 8px 8px 0;font-size:13px}
+.chips{display:flex;gap:12px;font-size:11px;color:var(--ink2)}
+.chips span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px;background:var(--c)}
+.tbl{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:12.5px;min-width:600px}
+th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--ink2);font-weight:500}td.n{text-align:right;font-variant-numeric:tabular-nums}
+.empty{padding:28px;text-align:center;color:var(--ink2)}
+.collect{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+.log{font-size:12px;color:var(--ink2);margin-top:8px;max-height:140px;overflow-y:auto}
+.log div{padding:3px 0;border-top:1px solid var(--line)}
+.log .err{color:var(--red)}
+.msg{font-size:12px;margin-left:6px}.msg.err{color:var(--red)}.msg.ok{color:var(--green)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div>
+    <h1>서점 발주·판매</h1>
+    <p class="sub">교보문고는 발주(입고 요청), 알라딘은 실제 판매권수와 당일 발주를 매일 수집합니다.</p>
+  </div>
+  <div class="status" id="status"></div>
+</header>
+
+<div class="controls">
+  <label>지표</label>
+  <div class="seg" id="metric">
+    <button aria-pressed="true" data-v="kyobo">교보 발주</button>
+    <button aria-pressed="false" data-v="aladin_sales">알라딘 판매</button>
+    <button aria-pressed="false" data-v="aladin">알라딘 발주</button>
+    <button aria-pressed="false" data-v="yes24" disabled title="휴대폰 인증 연동 후 활성화">YES24</button>
+  </div>
+  <label>기간</label>
+  <select id="period">
+    <option value="12">최근 12개월</option><option value="6">최근 6개월</option>
+    <option value="3" selected>최근 3개월</option><option value="1">최근 1개월</option><option value="0">전체</option>
+  </select>
+  <label>단위</label>
+  <div class="seg" id="unit"><button aria-pressed="true" data-v="week">주</button><button aria-pressed="false" data-v="month">월</button></div>
+</div>
+
+<div id="main">
+<div class="grid two">
+  <section class="panel">
+    <h2>시기 지도</h2>
+    <p class="hint" id="heat-hint"></p>
+    <div class="heat" id="heat"></div>
+    <div class="legend">적음 <span style="background:var(--heat0)"></span><span style="background:var(--heat1)"></span><span style="background:var(--heat2)"></span><span style="background:var(--heat3)"></span><span style="background:var(--heat4)"></span> 많음</div>
+  </section>
+  <section class="panel">
+    <h2>도서별 순위</h2>
+    <p class="hint">선택 기간 합계. 작은 선은 추이입니다.</p>
+    <ol class="rank" id="rank"></ol>
+  </section>
+</div>
+
+<section class="panel" style="margin-top:14px">
+  <div class="detail-head"><b id="d-title"></b><span class="chips" id="d-chips"></span></div>
+  <div class="kv" id="d-kv"></div>
+  <div class="bars" id="d-bars"></div>
+  <div class="insight" id="d-insight"></div>
+</section>
+
+<section class="panel" style="margin-top:14px">
+  <h2>원본 내역</h2>
+  <p class="hint">선택한 도서의 수집 행입니다(최근 60건).</p>
+  <div class="tbl"><table><thead id="raw-head"></thead><tbody id="raw"></tbody></table></div>
+</section>
+</div>
+
+<section class="panel" style="margin-top:14px">
+  <h2>수집 관리</h2>
+  <p class="hint">관리자·서비스운영팀만 실행할 수 있습니다. 자동 수집은 서버 환경변수로 켭니다(매일 새벽).</p>
+  <div class="collect">
+    <button class="btn secondary" data-collect="kyobo">교보 지금 수집</button>
+    <button class="btn secondary" data-collect="aladin">알라딘 지금 수집</button>
+    <span style="color:var(--line)">|</span>
+    <label>알라딘 판매 백필</label>
+    <input type="date" id="bf-from"> ~ <input type="date" id="bf-to">
+    <button class="btn secondary" id="bf-run">실행</button>
+    <span class="msg" id="c-msg"></span>
+  </div>
+  <div class="log" id="c-log"></div>
+</section>
+</div>
+
+<script>
+const USER_ID=new URLSearchParams(location.search).get('user_id')||'';
+const S={metric:'kyobo',period:3,unit:'week',sel:null};
+let ORDERS=[],SALES=[],STATUS=null;
+const num=n=>(n||0).toLocaleString('ko-KR');
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function api(path,opt){const r=await fetch(path,opt);const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||('HTTP '+r.status));return j}
+
+// ---------- 데이터 로드
+async function load(){
+  STATUS=await api('/api/bookstore/status');renderStatus();renderLog();
+  const [o,s]=await Promise.all([api('/api/bookstore/orders'),api('/api/bookstore/sales')]);
+  ORDERS=o.rows;SALES=s.rows;render();
+}
+function rowsForMetric(){
+  if(S.metric==='kyobo')return ORDERS.filter(r=>r.shop==='kyobo').map(r=>({date:r.order_date,isbn:r.isbn,title:r.title,ch:r.store,qty:r.qty,price:r.price,rate:r.supply_rate,vendor:r.vendor,flag:r.flag}));
+  if(S.metric==='aladin')return ORDERS.filter(r=>r.shop==='aladin').map(r=>({date:r.order_date,isbn:r.isbn,title:r.title,ch:r.store,qty:r.qty,price:r.price}));
+  if(S.metric==='aladin_sales')return SALES.map(r=>({date:r.sale_from,isbn:r.isbn,title:r.title,ch:'알라딘 판매',qty:r.qty,price:r.price}));
+  return [];
+}
+// ---------- 기간/주차
+const MS=864e5;
+function monday(d){const x=new Date(d);const k=(x.getDay()+6)%7;x.setDate(x.getDate()-k);x.setHours(0,0,0,0);return x}
+function ymd(d){return d.toISOString().slice(0,10)}
+function window_(rows){
+  const today=new Date();today.setHours(0,0,0,0);
+  let from;
+  if(S.period>0){from=new Date(today);from.setMonth(from.getMonth()-S.period)}
+  else{const mn=rows.reduce((a,r)=>r.date<a?r.date:a,'9999');from=mn==='9999'?today:new Date(mn)}
+  const start=monday(from),weeks=Math.max(1,Math.floor((today-start)/MS/7)+1);
+  return{start,weeks,fromStr:ymd(from),today};
+}
+const wkIdx=(d,start)=>Math.floor((new Date(d)-start)/MS/7);
+const wkLabel=(start,i)=>{const d=new Date(start);d.setDate(d.getDate()+i*7);return `${d.getMonth()+1}/${d.getDate()}`};
+const moKey=(start,i)=>{const d=new Date(start);d.setDate(d.getDate()+i*7);return `${String(d.getFullYear()).slice(2)}.${String(d.getMonth()+1).padStart(2,'0')}`};
+
+// ---------- 렌더
+function render(){
+  const all=rowsForMetric();const W=window_(all);
+  const rows=all.filter(r=>r.date>=W.fromStr);
+  const books={};rows.forEach(r=>{const b=books[r.isbn]||(books[r.isbn]={isbn:r.isbn,title:r.title,total:0,series:Array(W.weeks).fill(0)});b.total+=r.qty;const i=wkIdx(r.date,W.start);if(i>=0&&i<W.weeks)b.series[i]+=r.qty});
+  const list=Object.values(books).sort((a,b)=>b.total-a.total);
+  const main=document.getElementById('main');
+  if(!list.length){main.innerHTML=`<div class="panel empty">${S.metric==='yes24'?'YES24는 아직 연동되지 않았습니다.':'이 기간에 수집된 데이터가 없습니다. 아래에서 수집을 실행하거나 기간을 넓혀 보세요.'}</div>`;main.dataset.empty='1';return}
+  if(main.dataset.empty){location.reload();return}
+  if(!S.sel||!books[S.sel])S.sel=list[0].isbn;
+  drawHeat(list.slice(0,12),W);drawRank(list);drawDetail(rows.filter(r=>r.isbn===S.sel),books[S.sel],W);drawRaw(rows.filter(r=>r.isbn===S.sel));
+}
+function drawHeat(list,W){
+  const n=W.weeks,cw=16,ch=22,lx=190,ty=24,Wd=lx+n*cw+10,H=ty+list.length*ch+8;
+  const max=Math.max(1,...list.map(b=>Math.max(...b.series)));
+  const lvl=v=>v===0?'--heat0':v<max*.25?'--heat1':v<max*.5?'--heat2':v<max*.75?'--heat3':'--heat4';
+  let svg=`<svg viewBox="0 0 ${Wd} ${H}" width="${Math.max(Wd,520)}" xmlns="http://www.w3.org/2000/svg">`,last='';
+  const ml=[];for(let i=0;i<n;i++){const m=moKey(W.start,i);if(m!==last){ml.push([lx+i*cw,m]);last=m}}
+  ml.forEach(([x,m],k)=>{if(k+1<ml.length&&ml[k+1][0]-x<40)return;svg+=`<text x="${x}" y="14">${m}</text>`});
+  list.forEach((b,bi)=>{svg+=`<text x="${lx-8}" y="${ty+bi*ch+15}" text-anchor="end" ${b.isbn===S.sel?'font-weight="600" fill="var(--ink)"':''}>${esc(b.title.replace(/^20\d\d\s*/,'').slice(0,18))}</text>`;
+    b.series.forEach((v,i)=>{svg+=`<rect class="cell" data-isbn="${b.isbn}" x="${lx+i*cw}" y="${ty+bi*ch}" width="${cw}" height="${ch}" rx="3" fill="var(${lvl(v)})"><title>${esc(b.title)} · ${wkLabel(W.start,i)}주 · ${num(v)}권</title></rect>`})});
+  document.getElementById('heat').innerHTML=svg+'</svg>';
+  document.getElementById('heat-hint').textContent=`상위 ${list.length}종 × 주차. 진할수록 많습니다. 칸을 누르면 아래 상세가 바뀝니다.`;
+  document.querySelectorAll('#heat .cell').forEach(c=>c.addEventListener('click',()=>{S.sel=c.dataset.isbn;render()}));
+}
+function drawRank(list){
+  const all=list.reduce((a,b)=>a+b.total,0);
+  document.getElementById('rank').innerHTML=list.map((b,i)=>{const mx=Math.max(1,...b.series),L=b.series.length;const pts=b.series.map((v,j)=>`${L>1?(j/(L-1))*110:55},${24-(v/mx)*22}`);
+    return `<li class="${b.isbn===S.sel?'on':''}" data-isbn="${b.isbn}"><span class="no">${i+1}</span><span class="name">${esc(b.title)}<span class="isbn">${b.isbn}</span></span><svg class="spark" viewBox="0 0 110 26" preserveAspectRatio="none"><path d="M${pts.join(' L')}"/></svg><span class="qty">${num(b.total)}<small>${(b.total/all*100).toFixed(1)}%</small></span></li>`}).join('');
+  document.querySelectorAll('#rank li').forEach(li=>li.addEventListener('click',()=>{S.sel=li.dataset.isbn;render()}));
+}
+function drawDetail(rows,book,W){
+  const chans=[...new Set(rows.map(r=>r.ch))].sort();
+  let series=chans.map(()=>Array(W.weeks).fill(0));
+  rows.forEach(r=>{const i=wkIdx(r.date,W.start);if(i>=0&&i<W.weeks)series[chans.indexOf(r.ch)][i]+=r.qty});
+  let labels=Array.from({length:W.weeks},(_,i)=>wkLabel(W.start,i));
+  if(S.unit==='month'){const keys=[],idx={};for(let i=0;i<W.weeks;i++){const k=moKey(W.start,i);if(!(k in idx)){idx[k]=keys.length;keys.push(k)}}
+    series=series.map(arr=>{const m=Array(keys.length).fill(0);arr.forEach((v,i)=>m[idx[moKey(W.start,i)]]+=v);return m});labels=keys}
+  const n=labels.length,tot=labels.map((_,i)=>series.reduce((a,arr)=>a+arr[i],0)),sum=tot.reduce((a,c)=>a+c,0),pk=tot.indexOf(Math.max(...tot));
+  const sums=series.map(a=>a.reduce((x,y)=>x+y,0)),amt=rows.reduce((a,r)=>a+r.qty*(r.price||0),0);
+  const label={kyobo:'교보 발주',aladin:'알라딘 발주',aladin_sales:'알라딘 판매'}[S.metric];
+  document.getElementById('d-title').textContent=book.title;
+  const cls=['--green','--heat2','--plum'];
+  document.getElementById('d-chips').innerHTML=chans.map((c,i)=>`<span style="--c:var(${cls[i%3]})">${esc(c)}</span>`).join('')+`<span style="--c:var(--amber)">최고 ${S.unit==='week'?'주':'월'}</span>`;
+  document.getElementById('d-kv').innerHTML=`<div>${label} 합계<strong>${num(sum)}권</strong></div>`+(chans.length>1?chans.map((c,i)=>`<div>${esc(c)}<strong>${num(sums[i])}권</strong></div>`).join(''):'')+`<div>최고 ${S.unit==='week'?'주':'월'}<strong>${labels[pk]}</strong></div><div>정가 기준 금액<strong>₩${num(amt)}</strong></div>`;
+  const Wd=1000,H=210,px=36,bw=Math.min(56,(Wd-px-10)/n),mx=Math.max(1,...tot),base=H-26;
+  let svg=`<svg viewBox="0 0 ${Wd} ${H}" xmlns="http://www.w3.org/2000/svg"><line class="axis" x1="${px}" y1="${base}" x2="${Wd}" y2="${base}"/>`;
+  for(let i=0;i<n;i++){const x=px+i*bw+1;let y=base;series.forEach((arr,gi)=>{const h=(arr[i]/mx)*(base-20);y-=h;svg+=`<rect class="${i===pk?'peak':'c'+(gi%3)}" x="${x}" y="${y}" width="${Math.max(1,bw-2)}" height="${h}" opacity="${i===pk?1-gi*.22:1}"/>`});
+    const step=S.unit==='month'?1:Math.ceil(n/14);if(i%step===0)svg+=`<text x="${x+bw/2}" y="${H-8}" text-anchor="middle">${labels[i]}</text>`}
+  document.getElementById('d-bars').innerHTML=svg+`<text x="${px-6}" y="14" text-anchor="end">${num(mx)}</text></svg>`;
+  const before=tot.slice(Math.max(0,pk-4),pk),avg=before.length?before.reduce((a,c)=>a+c,0)/before.length:0,ratio=avg?(tot[pk]/avg).toFixed(1):null;
+  let txt=`<b>${labels[pk]}</b>${S.unit==='week'?' 주':''}에 ${label}가 가장 많았${ratio?`고, 직전 ${S.unit==='week'?'4주':'기간'} 평균의 <b>${ratio}배</b>입니다.`:'습니다. 비교할 직전 기간 데이터가 아직 없습니다.'}`;
+  if(chans.length>1)txt+=` ${chans.map((c,i)=>`${esc(c)} ${sum?Math.round(sums[i]/sum*100):0}%`).join(', ')}.`;
+  if(S.metric==='kyobo')txt+=' 발주는 입고 요청이라 실제 판매와 1~2주 시차가 있습니다.';
+  if(S.metric==='aladin_sales')txt+=' 알라딘 판매는 전일까지의 실제 판매권수이며 주문 취소로 소폭 변동될 수 있습니다.';
+  document.getElementById('d-insight').innerHTML=txt;
+}
+function drawRaw(rows){
+  const k=S.metric==='kyobo';
+  document.getElementById('raw-head').innerHTML=`<tr><th>일자</th><th>도서명</th><th>ISBN</th><th>${k?'채널':'구분'}</th>${k?'<th>거래처</th><th>고객주문</th>':''}<th class="n">수량</th>${k?'<th class="n">공급율</th>':''}<th class="n">정가</th></tr>`;
+  document.getElementById('raw').innerHTML=rows.slice().sort((a,b)=>a.date<b.date?1:-1).slice(0,60).map(r=>`<tr><td>${r.date}</td><td>${esc(r.title)}</td><td>${r.isbn}</td><td>${esc(r.ch)}</td>${k?`<td>${esc(r.vendor||'')}</td><td>${r.flag||'–'}</td>`:''}<td class="n">${num(r.qty)}</td>${k?`<td class="n">${r.rate?r.rate+'%':'–'}</td>`:''}<td class="n">${num(r.price)}</td></tr>`).join('');
+}
+// ---------- 상태/수집
+function renderStatus(){
+  const s=STATUS.shops,c=STATUS.credentials,el=document.getElementById('status');
+  const item=(k,n)=>s[k]?`<span><b>${n}</b> ${num(s[k].rows)}행 · ${s[k].from}~${s[k].to}</span>`:`<span class="warn">${n} 데이터 없음</span>`;
+  el.innerHTML=item('kyobo','교보 발주')+item('aladin_sales','알라딘 판매')+item('aladin','알라딘 발주')+`<span class="${STATUS.auto?'':'warn'}">자동 수집 ${STATUS.auto?'켜짐':'꺼짐'}</span>`+(c.kyobo&&c.aladin?'':'<span class="warn">서버에 서점 계정 환경변수 없음</span>');
+}
+function renderLog(){
+  document.getElementById('c-log').innerHTML=(STATUS.log||[]).map(l=>`<div class="${l.status==='error'?'err':''}">${l.ran_at} · ${l.shop} · ${l.d_from}~${l.d_to} · ${l.status}${l.rows?` · ${num(l.rows)}행`:''}${l.message?` · ${esc(l.message)}`:''}</div>`).join('')||'<div>수집 기록이 없습니다.</div>';
+}
+async function runCollect(body,btn){
+  const m=document.getElementById('c-msg');m.className='msg';m.textContent='수집 중… (서점 응답에 따라 수십 초 걸릴 수 있습니다)';
+  document.querySelectorAll('.collect button').forEach(b=>b.disabled=true);
+  try{const r=await api('/api/bookstore/collect'+(body.from?'/aladin-sales':''),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor_id:USER_ID,...body})});
+    if(r.ok===false)throw new Error(r.error||'실패');m.className='msg ok';m.textContent=`완료: ${num(r.rows)}행${r.sales?` + 판매 ${num(r.sales.rows)}행`:''}`;await load()}
+  catch(e){m.className='msg err';m.textContent=e.message}
+  finally{document.querySelectorAll('.collect button').forEach(b=>b.disabled=false)}
+}
+document.querySelectorAll('[data-collect]').forEach(b=>b.addEventListener('click',()=>runCollect({shop:b.dataset.collect})));
+document.getElementById('bf-run').addEventListener('click',()=>{const f=document.getElementById('bf-from').value,t=document.getElementById('bf-to').value;if(!f||!t)return;runCollect({from:f,to:t})});
+document.getElementById('period').addEventListener('change',e=>{S.period=+e.target.value;render()});
+[['metric','metric'],['unit','unit']].forEach(([id,key])=>document.getElementById(id).querySelectorAll('button').forEach(btn=>btn.addEventListener('click',()=>{S[key]=btn.dataset.v;S.sel=null;btn.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',b===btn));render()})));
+(()=>{const t=new Date(),f=new Date();f.setMonth(f.getMonth()-1);document.getElementById('bf-to').value=ymd(new Date(t-MS));document.getElementById('bf-from').value=ymd(f)})();
+load().catch(e=>{document.getElementById('main').innerHTML=`<div class="panel empty">불러오기 실패: ${esc(e.message)}</div>`});
+</script>
+</body>
+</html>
