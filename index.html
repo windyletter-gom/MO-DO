@@ -496,7 +496,7 @@ async function afterTaskAction(){
 }
 async function reopenWorkspaceSection(tid,code){
  let w=await api('/api/workspace/'+tid);pageTitle.textContent=`${w.team.name} WORKSPACE`;
- let common=[['OVERVIEW','오버뷰'],['TASKS','업무/프로젝트'],['SCHEDULE','일정 관리'],['MEETING','회의록'],['PURCHASE','구매내역'],['BOOK','독서토론'],['CHECKLIST','체크리스트'],['RESOURCE','자료/링크'],['DATACENTER','데이터 관리 센터'],['DATABOARD','데이터보드'],['CXREFUND','취소·환불 내역']];
+ let common=[['OVERVIEW','오버뷰'],['TASKS','업무/프로젝트'],['SCHEDULE','일정 관리'],['MEETING','회의록'],['PURCHASE','구매내역'],['BOOK','독서토론'],['CHECKLIST','체크리스트'],['RESOURCE','자료/링크'],['DATACENTER','데이터 관리 센터'],['DATABOARD','데이터보드'],['CXREFUND','취소·환불 내역'],['BOOKSTORE','서점 발주·판매']];
  if(tid===1) common.splice(2,0,['FILMING','강의촬영(콘.제작)']);
  if(tid===1) common.splice(8,0,['REFUND','환불과정 관리'],['MCC_REVIEW','교재·법령 검수']);
  if(tid===6){
@@ -1329,7 +1329,7 @@ async function openWorkspace(tid){
  let w=await api('/api/workspace/'+tid);pageTitle.textContent=`${w.team.name} WORKSPACE`;
  let common=[
  ['OVERVIEW','오버뷰'],['TASKS','업무/프로젝트'],['SCHEDULE','일정 관리'],['MEETING','회의록'],['PURCHASE','구매내역'],
- ['BOOK','독서토론'],['CHECKLIST','체크리스트'],['RESOURCE','자료/링크'],['DATACENTER','데이터 관리 센터'],['DATABOARD','데이터보드'],['CXREFUND','취소·환불 내역']
+ ['BOOK','독서토론'],['CHECKLIST','체크리스트'],['RESOURCE','자료/링크'],['DATACENTER','데이터 관리 센터'],['DATABOARD','데이터보드'],['CXREFUND','취소·환불 내역'],['BOOKSTORE','서점 발주·판매']
  ];
  if(tid===1) common.splice(2,0,['FILMING','강의촬영(콘.제작)']);
  if(tid===1) common.splice(8,0,['REFUND','환불과정 관리'],['MCC_REVIEW','교재·법령 검수']);
@@ -1432,6 +1432,7 @@ async function workspaceSection(tid,code,btn){
  if(code==='DATACENTER'){return dataCenterView(tid)}
  if(code==='DATABOARD'){body.innerHTML=`<div class="row" style="justify-content:flex-end"><button class="btn" onclick="boardCreateModal(${tid})">+ 데이터보드 만들기</button></div><div class="workspace-grid section">${w.boards.map(b=>`<div class="card module-card" onclick="openBoardInWorkspace(${tid},${b.id})"><h3>${b.name}</h3><div class="muted">${b.description||''}</div></div>`).join('')||'<div class="muted">등록된 데이터보드가 없습니다.</div>'}</div>`;return}
  if(code==='CXREFUND'){return refundLogSection(tid);}
+ if(code==='BOOKSTORE'){body.innerHTML=`<iframe src="/static/bookstore.html?user_id=${currentUser.id}" title="서점 발주·판매" style="width:100%;height:calc(100vh - 150px);min-height:720px;border:0;border-radius:10px;background:#fff"></iframe>`;return}
  if(code==='KPI'){body.innerHTML=`<div class="card"><h3>KPI</h3><div class="muted">개인/팀 목표, 실적, 달성률 관리 영역입니다. 운영 테스트 후 실제 KPI 항목을 팀별로 정의해 연결합니다.</div></div>`;return}
 }
 

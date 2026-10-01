@@ -2,6 +2,7 @@
 from __future__ import annotations
 import os, re, json, sqlite3, threading, webbrowser, traceback, sys, subprocess, base64, mimetypes, time, socket, hashlib
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+import bookstore_api   # 서점 발주·판매 수집/조회 API (bookstore_api.py + scm_collect.py)
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
 
@@ -980,6 +981,7 @@ class App(BaseHTTPRequestHandler):
                 return self.send_error(404)
 
             with db() as c:
+                if bookstore_api.handle_get(self, c, p, q): return
                 if p == "/api/users":
                     rows=c.execute("""SELECT u.*,t.name team_name FROM users u LEFT JOIN teams t ON u.team_id=t.id
                     ORDER BY CASE WHEN u.role='DIVISION_ADMIN' THEN 0 ELSE 1 END,t.sort_order,u.is_team_leader DESC,u.id""").fetchall()
@@ -2236,6 +2238,7 @@ class App(BaseHTTPRequestHandler):
             p=urlparse(self.path).path
             x=self.body()
             with db() as c:
+                if bookstore_api.handle_post(self, c, p, x): return
                 if p=="/api/login":
                     # 이메일 전체 또는 아이디(이메일 @ 앞부분)로 로그인 가능
                     ident=(x.get("email") or "").strip().lower()
@@ -3436,6 +3439,8 @@ def main():
     ensure_calendar_columns()
     ensure_planning_columns()
     ensure_weekly_columns()
+    bookstore_api.ensure_schema(db)
+    bookstore_api.start_scheduler(db)
     with db() as c:
         c.execute("UPDATE users SET role='SUPER_ADMIN' WHERE name IN ('정해근','이원행')")
         c.execute("UPDATE users SET account_status=CASE WHEN COALESCE(active,1)=1 THEN 'ACTIVE' ELSE 'RETIRED' END WHERE account_status IS NULL OR account_status=''")
